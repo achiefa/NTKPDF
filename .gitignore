@@ -1,0 +1,22 @@
+pdfs
+output
+figs
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+master.pdf
+*.toc
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd 
+
+# MacOS specific files
+.DS_Store

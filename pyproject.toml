@@ -1,0 +1,34 @@
+[build-system]
+requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.1.0"]
+build-backend = "poetry_dynamic_versioning.backend"
+
+
+[tool.poetry]
+name = "ntkpdf"
+version = "1.0.0"
+authors = [ "Amedeo Chiefa" ]
+description = "A tool for the NTK analysis"
+# repository = "https://github.com/HEP-PBSP/colibri"
+# readme = "README.md"
+
+
+[tool.poetry.dependencies]
+python = ">=3.9"
+prompt_toolkit = "*"
+h5py = "*"
+
+jax = "*"
+
+# nnpdf dependency
+#nnpdf = { git = "https://github.com/NNPDF/nnpdf" }
+
+
+[tool.poetry.extras]
+test = [
+    "pytest",
+    "hypothesis",
+]
+
+[tool.poetry.scripts]
+ntkpdf = "ntkpdf.app:main"
+ntkanalysis = "ntkpdf.scripts:ntkanalysis"

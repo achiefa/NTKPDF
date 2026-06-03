@@ -1,0 +1,195 @@
+# This is the driver template for the NTK analysis. It consists on a
+# validphys-like runcard where some settings are missing and are to be filled by
+# the ntkanalysis script. The settings below are a sample of such settings,
+# kept for reference
+#
+# meta: title: The title of the Report keywords: [report_template] author: NNPDF
+#   Collaboration
+#
+# current:
+#   fit: {id: id_of_the_base_fit}
+#   pdf: {id: id_of_the_base_fit, label: "Current Fit"}
+#   theory:
+#     from_: fit
+#   theoryid:
+#     from_: theory
+#   speclabel: "Current Fit"
+#
+
+pdfs:
+  - from_: current
+
+fits:
+  - from_: current
+
+# Note: singular `fit` is injected directly (not via `from_: current`) by
+# ntkanalysis.complete_mapping. Using `from_` here would taint config resolution
+# and stop base_metamodels/init_grids_by_name from being cached per (fit, nreplicas).
+
+Rankspecs:
+  - rank_indices: [1, 2, 3, 4, 6, 7, 8, 9, 10]
+    rank_title: From r=1 to r=10
+    yscale: log
+  # - rank_indices: [11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+  #   rank_title: From r=11 to r=20
+  #   yscale: log
+  # - rank_indices: [21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+  #   rank_title: From r=21 to r=30
+  #   yscale: log
+  # - rank_indices: [31, 32, 33, 34, 35, 36, 37, 38, 39, 40]
+  #   rank_title: From r=31 to r=40
+  #   yscale: log
+  # - rank_indices: [41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+  #   rank_title: From r=41 to r=50
+  #   yscale: log
+  # - rank_indices: [60, 70, 80, 90, 100]
+  #   rank_title: From r=60 to r=100
+  #   yscale: log
+  # - rank_indices: [1,2,3, 21,21,23, 51,52,53, 110,120,130]
+  #   rank_title: Mixed
+  #   yscale: log
+
+# Global list of model selectors. Each entry has a `name` (referenced by the
+# Selectors groups below) and the modifier flags. The grids for all of these are
+# built together, once per fit and replica count, in produce_init_grids_by_name.
+model_selectors:
+  - {name: with_prefactors, no_prefactors: False}
+  - {name: without_prefactors, no_prefactors: True}
+
+# Presentation groups: each selects which model selectors to overlay in a plot
+# (by name) and the legend labels, in matching order.
+Selectors:
+  - selectors: [with_prefactors]
+    labels:
+    - "W/ prefactors"
+    selector_name: "Using prefactors"
+  - selectors: [without_prefactors]
+    labels:
+    - "W/o prefactors"
+    selector_name: "Removing prefactors"
+  - selectors: [without_prefactors, with_prefactors]
+    labels:
+    - "W/o prefactors"
+    - "W/ prefactors"
+    selector_name: "Comparing w/ and w/o prefactors"
+
+Customreplicas:
+  - custom_replicas: None
+    nreplicas_title: "original number of replicas"
+  - custom_nreplicas: 5
+    nreplicas_title: "5 replicas"
+  # - custom_nreplicas: 100
+  #   nreplicas_title: "100 replicas"
+  # - custom_nreplicas: 200
+  #   nreplicas_title: 200 replicas
+
+
+use_cuts: "fromfit"
+
+
+# use_weights_in_covmat: False
+
+# Q: 1.651
+
+# Scales:
+#   - Q: 1.651
+#     Scaletitle: "Q = 1.65 GeV"
+#   - Q: 100
+#     Scaletitle: "Q = 100 GeV"
+
+# PDFnormalize:
+#   - Normtitle: Absolute
+
+#   - normalize_to: 2
+#     Normtitle: Ratio
+
+# Basespecs:
+#   - basis: CCBAR_ASYMM_FLAVOUR
+#     Basistitle: Flavour basis
+#   - basis: CCBAR_ASYMM
+#     Basistitle: Evolution basis
+
+PDFscalespecs:
+  - xscale: log
+    Xscaletitle: Log
+  - xscale: linear
+    Xscaletitle: Linear
+
+
+ntk_report:
+    meta: Null
+    template: ntk.md
+
+initialisation_report:
+    meta: Null
+    template: pdf_init.md
+
+loss_report:
+    meta: Null
+    template: loss_all_replicas.md
+
+# pdf_report:
+#   meta: Null
+#   template: pdf.md
+
+# exponents_report:
+#   meta: Null
+#   template: exponents.md
+
+Eigenvaluesconfigs:
+  - name: model
+    title_eigenvalues: (full model)
+  - name: nn
+    title_eigenvalues: (NN only)
+
+
+template: report.md
+
+positivity:
+  from_: fit
+
+description:
+  from_: fit
+
+dataset_inputs:
+  from_: fit
+
+# Top-level theory context for the data/FK chain (loss page -> ntk_fast_kernel_arrays
+# -> data -> dataset -> theoryid). Mirrors `current` (theory <- fit, theoryid <- theory).
+theory:
+  from_: fit
+theoryid:
+  from_: theory
+
+dataspecs:
+  - theoryid:
+      from_: current
+    pdf:
+      from_: current
+    fit:
+      from_: current
+    speclabel:
+      from_: current
+    dataset_inputs:
+      from_: fit
+
+t0_info:
+  - use_t0: True
+    datacuts:
+      from_: fit
+    t0pdfset:
+      from_: datacuts  
+
+# Scales:
+#   - Q: 1.651
+#     Scaletitle: "Q = 1.65 GeV"
+
+# DataGroups:
+#   - metadata_group: nnpdf31_process
+#   - metadata_group: experiment
+
+# ProcessGroup:
+#     metadata_group: nnpdf31_process
+
+actions_:
+  - report(main=true)
