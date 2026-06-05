@@ -373,7 +373,11 @@ class ntkConfig(colibriConfig):
                 N3PDF(model.split_replicas()), 1.65, XGRID, "evolution", EVOL_LIST
             )
         return grids
-
+    
+    def produce_pdf_at_init(self, metamodels, input_grid):
+        """Return the model at initialisation in the NTKStats format."""
+        return predict_pdf_grid(metamodels, input_grid)
+    
     def produce_model_at_epoch(self, fit_weights, fit_preprocessing, metamodels, nreplicas, vetoname=None):
         """Get the PDF model at the specified epoch, with the corresponding weights."""
         pdf_models = set_epoch_weights(metamodels, fit_weights, fit_preprocessing, nreplicas)
@@ -389,3 +393,37 @@ class ntkConfig(colibriConfig):
     def produce_pdf_at_epoch(self, model_at_epoch, input_grid):
         pdf_models, vetoes = model_at_epoch
         return predict_pdf_grid(pdf_models, input_grid, vetoes=vetoes)
+
+    def produce_fakepdf(self, fit):
+        """The closure-test underlying-law PDF (``closuretest: fakepdf``) of the
+        fit, parsed into a validphys PDF. Mirrors the notebook's
+        ``fit.as_input()['closuretest']['fakepdf']``; raises if the fit is not a
+        closure test."""
+        try:
+            name = fit.as_input()["closuretest"]["fakepdf"]
+        except KeyError as e:
+            raise ConfigError(
+                f"fit {fit.name} has no 'closuretest: fakepdf' (not a closure test); "
+                "set show_fakepdf: False (the default) to skip the underlying-law overlay."
+            ) from e
+        return self.parse_pdf(name)
+
+    def produce_fakepdf_grid(self, fit, show_fakepdf=False):
+        """Plotting grid for the closure-test underlying-law PDF, or ``None`` when
+        the user did not opt in via ``show_fakepdf``.
+
+        Gated here (rather than as a plain provider) so that a provider depending
+        on ``fakepdf_grid`` does not *force* the fakepdf to be built/parsed: when
+        ``show_fakepdf`` is False the underlying law is never looked up, so the
+        page also works for fits that are not closure tests. Same Q/xgrid/basis/
+        flavours as ``pdf_grid_at_epoch`` so the two overlay and normalise.
+        """
+        if not show_fakepdf:
+            return None
+        # Lazy import: keras/jax-backed stack, only after KERAS_BACKEND is set.
+        from validphys.pdfgrids import xplotting_grid
+        from n3fit.vpinterface import EVOL_LIST
+        from ntkpdf.utils import XGRID
+
+        fakepdf = self.produce_fakepdf(fit)
+        return xplotting_grid(fakepdf, 1.65, XGRID, "evolution", EVOL_LIST)

@@ -34,8 +34,20 @@ Loss functions
 --------------
 [Loss functions all replicas]({@loss_report report@})
 
+PDFs at epochs
+--------------
+{@with Epochspecs@}
+[PDFs at epoch {@epoch@}]({@pdf_epochs_report report@})
+{@endwith@}
+
 NTK plots
 ---------
 {@with Eigenvaluesconfigs@}
 [Plots NTK ({@title_eigenvalues@})]({@ntk_report report@})
+{@endwith@}
+
+Feature eigenmodes
+------------------
+{@with Eigenvaluesconfigs@}
+[Plots H ({@title_eigenvalues@})]({@h_val_report report@})
 {@endwith@}

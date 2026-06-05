@@ -1,17 +1,12 @@
 """Shared plotting style for figures.
 """
-import functools
 from collections import namedtuple
-from dataclasses import dataclass, field
-from typing import Any
 
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 from matplotlib.figure import Figure
-
-from reportengine.figure import figuregen
 
 # ---------------------------------------------------------------------------
 # Page geometry  (A4, inner=40mm, outer=25mm → text width = 145mm)
@@ -206,9 +201,15 @@ class LineHandler:
 # forwarded to ``ax.plot`` (and ``band_kwargs`` to ``ax.fill_between``).
 def draw_bounds(ax, stats, xgrid, *,
                 color=None, alpha=0.3, linestyle="-", linewidth=1.5,
+                band_linestyle="--",
                 no_bands=False, show_68=True, show_std=True,
                 central_value="mean", band_kwargs=None, **line_kwargs):
-    """Draw the central value with std and/or 68% bands; return the HandlerSpec."""
+    """Draw the central value with std and/or 68% bands; return the HandlerSpec.
+
+    The 68% band edges are drawn with ``band_linestyle`` (dashed by default), and
+    that same style is carried in the returned HandlerSpec so the ComposedHandler
+    legend box contour matches the band edges.
+    """
     band_kwargs = band_kwargs or {}
 
     if central_value == "mean":
@@ -229,9 +230,9 @@ def draw_bounds(ax, stats, xgrid, *,
         ax.fill_between(xgrid, down, up, color=color, alpha=alpha, **band_kwargs)
     if show_68:
         down68, up68 = stats.errorbar68()
-        ax.plot(xgrid, up68, linestyle=linestyle, color=color)
-        ax.plot(xgrid, down68, linestyle=linestyle, color=color)
-    return HandlerSpec(color, alpha, linestyle)
+        ax.plot(xgrid, up68, linestyle=band_linestyle, color=color)
+        ax.plot(xgrid, down68, linestyle=band_linestyle, color=color)
+    return HandlerSpec(color, alpha, band_linestyle)
 
 
 def draw_line(ax, stats, xgrid, *,

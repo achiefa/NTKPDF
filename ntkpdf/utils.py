@@ -147,27 +147,27 @@ def produce_plotting_grid(
     res = XPlottingGrid(q0, basis, flavours, xgrid, stats_gv, "log")
     return (basis, res)
 
-def plotting_grid_from_model(
-    fitname,
-    epochs,
-    xgrid,
-    basis,
-    flavours,
-    vetoname: str = None,
-    replica_index_list: tuple = None
-):
-    """Construct a plotting grid directly from the PDF model, using
-    the vp-interface."""
-    fitinfo = API.fit(fit=fitname).as_input()
-    theoryID = API.theoryid(**fitinfo['theory'])
-    q0 = theoryID.get_description().get("Q0")
-    pdf_models, vetoes = get_pdf_model_at_epochs(fitname, epochs, vetoname=vetoname)
-    selected_replicas = np.asarray(pdf_models.split_replicas())[vetoes]
-    if replica_index_list is not None:
-        selected_replicas = selected_replicas[replica_index_list]
-    n3pdf = N3PDF(selected_replicas)
-    x_grid = xplotting_grid(n3pdf, q0, xgrid, basis, flavours)
-    return x_grid
+# def plotting_grid_from_model(
+#     fitname,
+#     epochs,
+#     xgrid,
+#     basis,
+#     flavours,
+#     vetoname: str = None,
+#     replica_index_list: tuple = None
+# ):
+#     """Construct a plotting grid directly from the PDF model, using
+#     the vp-interface."""
+#     fitinfo = API.fit(fit=fitname).as_input()
+#     theoryID = API.theoryid(**fitinfo['theory'])
+#     q0 = theoryID.get_description().get("Q0")
+#     pdf_models, vetoes = get_pdf_model_at_epochs(fitname, epochs, vetoname=vetoname)
+#     selected_replicas = np.asarray(pdf_models.split_replicas())[vetoes]
+#     if replica_index_list is not None:
+#         selected_replicas = selected_replicas[replica_index_list]
+#     n3pdf = N3PDF(selected_replicas)
+#     x_grid = xplotting_grid(n3pdf, q0, xgrid, basis, flavours)
+#     return x_grid
 
 def plotting_grid_from_ntkstat(
     stats: NTKStats,

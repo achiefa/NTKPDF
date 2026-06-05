@@ -29,7 +29,7 @@ def _normalise(grids, normalise_to):
     if normalise_to is None:
         return grids
 
-    normvals = grids[normalise_to].grid_values.central_value()
+    normvals = grids[normalise_to-1].grid_values.central_value()
 
     # ``np.errstate`` restores the floating-point error *mode* on exit, so unlike
     # ``np.seterr``/``np.seterrcall`` it does not leak global NumPy state. We

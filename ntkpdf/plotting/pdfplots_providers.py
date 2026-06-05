@@ -104,3 +104,53 @@ def compare_fits_at_init(
                           xlim=xlim,
                           ylim=ylim
                           )
+
+
+@figuregen
+def plot_pdfs_at_epoch(
+    pdf_grid_at_epoch,
+    fakepdf_grid,
+    epoch,
+    flavours: Optional[list] = None,
+    ylabels: Optional[list] = None,
+    plot_args=None,
+    plot_provider="bounds",
+    normalise_to=None,
+    xscale='linear',
+    yscale='linear',
+    xlim=None,
+    ylim=None,
+    show_central_fakepdf=False
+    ):
+    """One figure per flavour of the PDF at the given training ``epoch``.
+
+    ``epoch`` is bound from the ``Epochspecs`` namespace (one entry per epoch the
+    user selected on the command line), so the report renders this once per epoch.
+
+    The closure-test underlying-law PDF is overlaid only when the user opted in
+    (``show_fakepdf``): otherwise ``fakepdf_grid`` is ``None`` and just the fitted
+    PDF is shown. When present the underlying law is the second grid (index 1), so
+    ``normalise_to: 1`` in the runcard gives a ratio-to-truth plot.
+    """
+    flavours, ylabels = _resolve_flavours(flavours, ylabels)
+
+    grids = [pdf_grid_at_epoch]
+    labels = [rf"$\rm Epoch\ {epoch}$"]
+    if fakepdf_grid is not None:
+        grids.append(fakepdf_grid)
+        labels.append(r"$\rm Underlying\ law$")
+        if show_central_fakepdf:
+            plot_args = [None, {"linestyle": "solid", "color": "black"}]
+
+    yield from plot_grids(grids,
+                          flavours=flavours,
+                          ylabels=ylabels,
+                          labels=labels,
+                          plot_args=plot_args,
+                          plot_provider=plot_provider,
+                          normalise_to=normalise_to,
+                          xscale=xscale,
+                          yscale=yscale,
+                          xlim=xlim,
+                          ylim=ylim
+                          )

@@ -41,6 +41,21 @@ class CompareFitApp(App):
             help="The label for the fit that the report is being produced for.",
         )
         parser.add_argument(
+            '--epochs',
+            nargs='+',
+            type=int,
+            default=None,
+            help="Training epoch(s) at which to plot the PDF. Each must have "
+                 "saved weights in the fit (see fit_replicas/.../parameters).",
+        )
+        parser.add_argument(
+            '--show-fakepdf',
+            dest='show_fakepdf',
+            action='store_true',
+            help="Overlay the closure-test underlying-law PDF on the PDF-at-epoch "
+                 "plots (only for closure-test fits).",
+        )
+        parser.add_argument(
             '-i',
             '--interactive',
             help="Ask interactively for the missing data",
@@ -159,6 +174,13 @@ class CompareFitApp(App):
         # the PDF model inside every Selectors/PDFscalespecs loop. A direct input
         # lets base_metamodels/init_grids_by_name be cached once per (fit, nreplicas).
         autosettings['fit'] = currentmap
+
+        # One namespace entry per user-selected epoch; the PDF-at-epochs report
+        # page iterates over these. Empty (default) -> that page renders nothing.
+        autosettings['Epochspecs'] = [{'epoch': e} for e in (args.get('epochs') or [])]
+
+        # Whether to overlay the closure-test underlying-law PDF on those plots.
+        autosettings['show_fakepdf'] = bool(args.get('show_fakepdf'))
 
         autosettings['use_thcovmat_if_present'] = args['thcovmat_if_present']
 

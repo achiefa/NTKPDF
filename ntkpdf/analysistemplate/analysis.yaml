@@ -22,6 +22,8 @@ pdfs:
 fits:
   - from_: current
 
+custom_epochs: [500, 1000, 2000, 5000]
+
 # Note: singular `fit` is injected directly (not via `from_: current`) by
 # ntkanalysis.complete_mapping. Using `from_` here would taint config resolution
 # and stop base_metamodels/init_grids_by_name from being cached per (fit, nreplicas).
@@ -83,31 +85,13 @@ Customreplicas:
   # - custom_nreplicas: 200
   #   nreplicas_title: 200 replicas
 
+Eigenvaluesconfigs:
+  - name: model
+    title_eigenvalues: full model
+  - name: nn
+    title_eigenvalues: NN only
 
 use_cuts: "fromfit"
-
-
-# use_weights_in_covmat: False
-
-# Q: 1.651
-
-# Scales:
-#   - Q: 1.651
-#     Scaletitle: "Q = 1.65 GeV"
-#   - Q: 100
-#     Scaletitle: "Q = 100 GeV"
-
-# PDFnormalize:
-#   - Normtitle: Absolute
-
-#   - normalize_to: 2
-#     Normtitle: Ratio
-
-# Basespecs:
-#   - basis: CCBAR_ASYMM_FLAVOUR
-#     Basistitle: Flavour basis
-#   - basis: CCBAR_ASYMM
-#     Basistitle: Evolution basis
 
 PDFscalespecs:
   - xscale: log
@@ -115,7 +99,9 @@ PDFscalespecs:
   - xscale: linear
     Xscaletitle: Linear
 
-
+# +++++++++++++++++++
+#     Templates
+# +++++++++++++++++++
 ntk_report:
     meta: Null
     template: ntk.md
@@ -128,20 +114,13 @@ loss_report:
     meta: Null
     template: loss_all_replicas.md
 
-# pdf_report:
-#   meta: Null
-#   template: pdf.md
+pdf_epochs_report:
+    meta: Null
+    template: pdf_at_epochs.md
 
-# exponents_report:
-#   meta: Null
-#   template: exponents.md
-
-Eigenvaluesconfigs:
-  - name: model
-    title_eigenvalues: (full model)
-  - name: nn
-    title_eigenvalues: (NN only)
-
+h_val_report:
+    meta: Null
+    template: h_vals.md
 
 template: report.md
 
@@ -179,17 +158,6 @@ t0_info:
       from_: fit
     t0pdfset:
       from_: datacuts  
-
-# Scales:
-#   - Q: 1.651
-#     Scaletitle: "Q = 1.65 GeV"
-
-# DataGroups:
-#   - metadata_group: nnpdf31_process
-#   - metadata_group: experiment
-
-# ProcessGroup:
-#     metadata_group: nnpdf31_process
 
 actions_:
   - report(main=true)

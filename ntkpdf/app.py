@@ -24,8 +24,10 @@ ntk_providers = validphys_providers + colibri_providers + \
     "ntkpdf.data_theory",
     "ntkpdf.summary",
     "ntkpdf.pdfgrids",
+    "ntkpdf.ntkdecomposition",
     "ntkpdf.plotting.pdfplots_providers",
     "ntkpdf.plotting.loss_providers",
+    "ntkpdf.plotting.feature_plots",
   ]
 
 

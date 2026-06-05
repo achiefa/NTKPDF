@@ -19,8 +19,11 @@ h5py = "*"
 
 jax = "*"
 
-# nnpdf dependency
-#nnpdf = { git = "https://github.com/NNPDF/nnpdf" }
+# colibri, pinned to its development branch. nnpdf is provided transitively by
+# colibri (which pins https://github.com/NNPDF/nnpdf.git @ ntk_colibri), so it is
+# intentionally NOT pinned here -- a second pin would have to be byte-identical or
+# Poetry's resolver would conflict (strategy A).
+colibri = { git = "https://github.com/HEP-PBSP/colibri.git", branch = "ntk" }
 
 
 [tool.poetry.extras]
