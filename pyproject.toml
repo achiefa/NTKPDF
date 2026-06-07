@@ -35,3 +35,10 @@ test = [
 [tool.poetry.scripts]
 ntkpdf = "ntkpdf.app:main"
 ntkanalysis = "ntkpdf.scripts:ntkanalysis"
+
+[tool.pytest.ini_options]
+testpaths = ["ntkpdf/tests"]
+markers = [
+    "linux: mark test to run only on linux",
+    "darwin: mark test to run only on macOS",
+]

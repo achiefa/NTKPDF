@@ -14,22 +14,14 @@ shared production over the ``fits`` dimension. Each element is the
 ``{selector_name: XPlottingGrid}`` mapping for one fit.
 """
 
-from n3fit.vpinterface import EVOL_LIST, N3PDF
 from reportengine import collect
-from validphys.pdfgrids import xplotting_grid
-
-from ntkpdf.utils import XGRID
 
 collected_init_grids = collect("init_grids_by_name", ("fits",))
 
-
-def pdf_grid_at_epoch(model_at_epoch):
-    """Plotting grid for the PDF model at a given training epoch.
-
-    ``model_at_epoch`` (config production) is the shared model with that epoch's
-    fitted weights loaded; ``epoch`` flows into it through ``fit_weights``.
-    """
-    pdf_models, _vetoes = model_at_epoch
-    return xplotting_grid(
-        N3PDF(pdf_models.split_replicas()), 1.65, XGRID, "evolution", EVOL_LIST
-    )
+# ``pdf_grid_at_epoch`` is built as a config production
+# (``ntkConfig.produce_pdf_grid_at_epoch``) rather than a plain provider: the
+# grid must be materialised at graph-build time, interleaved with the in-place
+# mutation of the shared model in ``produce_model_at_epoch``, before the next
+# epoch overwrites it. A deferred provider would run after every epoch's
+# production, so all collected grids would show the last epoch.
+pdf_grid_all_epochs = collect("pdf_grid_at_epoch", ("epochs",))

@@ -118,6 +118,10 @@ pdf_epochs_report:
     meta: Null
     template: pdf_at_epochs.md
 
+pdf_all_epochs_report:
+    meta: Null
+    template: pdf_all_epochs.md
+
 h_val_report:
     meta: Null
     template: h_vals.md

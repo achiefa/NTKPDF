@@ -394,6 +394,35 @@ class ntkConfig(colibriConfig):
         pdf_models, vetoes = model_at_epoch
         return predict_pdf_grid(pdf_models, input_grid, vetoes=vetoes)
 
+    def produce_pdf_grid_at_epoch(self, model_at_epoch):
+        """PDF plotting grid (``XPlottingGrid``) for the model at a given epoch.
+
+        This is a *production*, not a plain provider, and that is load-bearing.
+        ``produce_model_at_epoch`` loads each epoch's weights into the *shared*
+        base model **in place** and returns that same object, so the grid is
+        only valid while the model still holds this epoch's weights. As a
+        ``produce_`` method this runs eagerly at graph-build time, interleaved
+        with its own epoch's mutation -- ``model_at_epoch`` is resolved (the
+        model is set to this epoch) and the prediction is materialised into a
+        detached NumPy grid immediately after, before the next epoch's
+        production overwrites the model.
+
+        A deferred provider would instead run at *execution* time, after every
+        epoch's production has already mutated the shared model, so the model
+        would hold only the last epoch's weights and all collected grids (see
+        ``pdf_grid_all_epochs``) would be identical.
+        """
+        # Lazy imports: these pull in the keras/jax-backed stack, which must only
+        # happen after ``ntkpdf`` has set ``KERAS_BACKEND`` (see ``__init__.py``).
+        from n3fit.vpinterface import EVOL_LIST, N3PDF
+        from validphys.pdfgrids import xplotting_grid
+        from ntkpdf.utils import XGRID
+
+        pdf_models, _vetoes = model_at_epoch
+        return xplotting_grid(
+            N3PDF(pdf_models.split_replicas()), 1.65, XGRID, "evolution", EVOL_LIST
+        )
+
     def produce_fakepdf(self, fit):
         """The closure-test underlying-law PDF (``closuretest: fakepdf``) of the
         fit, parsed into a validphys PDF. Mirrors the notebook's

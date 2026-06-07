@@ -39,6 +39,7 @@ PDFs at epochs
 {@with Epochspecs@}
 [PDFs at epoch {@epoch@}]({@pdf_epochs_report report@})
 {@endwith@}
+[All epochs compared]({@pdf_all_epochs_report report@})
 
 NTK plots
 ---------
