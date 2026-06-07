@@ -16,9 +16,15 @@ it never depends on (or trusts) a pre-existing cache.
 """
 
 import numpy as np
+import pytest
 
 from ntkpdf.api import API
 from ntkpdf.tests.conftest import FIT
+
+# Every test here downloads the test fit and computes NTKs; the ``fit`` marker
+# routes them to the end-to-end CI job (and lets a fast run skip them via
+# ``-m "not fit"``).
+pytestmark = pytest.mark.fit
 
 REPLICA = 1
 MAX_EPOCH = 100  # smallest stored snapshot -> a single NTK per config

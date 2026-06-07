@@ -1,0 +1,54 @@
+name: Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+# Bump to invalidate the cached conda packages.
+env:
+  CACHE_NUMBER: 0
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+
+    # Two parallel jobs sharing one conda build: the fast unit job gives quick,
+    # reliable feedback; the end-to-end job downloads the test fit from the NNPDF
+    # server (network + model build), so it is kept separate and not allowed to
+    # cancel the unit job if it flakes.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Unit tests (fit-free)
+            markers: "not fit"
+          - name: End-to-end tests (downloaded fit)
+            markers: "fit"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Conda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: ntkpdf-dev
+          use-mamba: true
+          auto-activate-base: false
+
+      - name: Cache Conda packages
+        uses: actions/cache@v4
+        with:
+          path: ~/conda_pkgs_dir
+          key: ${{ runner.os }}-conda-${{ env.CACHE_NUMBER }}-${{ hashFiles('environment.yml') }}
+
+      - name: Create environment from environment.yml
+        shell: bash -l {0}
+        run: mamba env create -n ntkpdf-dev -f environment.yml
+
+      - name: Run tests
+        shell: bash -l {0}
+        run: pytest -p no:warnings -m "${{ matrix.markers }}" ntkpdf/tests

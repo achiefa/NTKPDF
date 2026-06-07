@@ -1,0 +1,20 @@
+name: ntkpdf-dev
+
+# ntkpdf is pip-installable, but its dependency chain (colibri -> nnpdf) needs the
+# LHAPDF C++ library and colibri's MPI/ultranest stack, none of which pip can build
+# from source reliably. Mirror colibri's own ``environment.yml``: pull those from
+# conda-forge, then ``pip install -e .[test]`` brings in ntkpdf + the git-pinned
+# colibri/nnpdf and the pytest extra.
+channels:
+  - conda-forge
+
+dependencies:
+  - python >= 3.11,<3.14
+  - mpich
+  - lhapdf
+  - pandoc
+  - mpi4py
+  - ultranest
+  - pip
+  - pip:
+    - -e .[test]

@@ -41,4 +41,5 @@ testpaths = ["ntkpdf/tests"]
 markers = [
     "linux: mark test to run only on linux",
     "darwin: mark test to run only on macOS",
+    "fit: mark test as requiring the downloaded test fit (network + model build)",
 ]

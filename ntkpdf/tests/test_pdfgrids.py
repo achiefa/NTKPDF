@@ -16,9 +16,14 @@ Uses the downloaded test fit (model build + predict); a few seconds.
 """
 
 import numpy as np
+import pytest
 
 from ntkpdf.api import API
 from ntkpdf.tests.conftest import FIT
+
+# Downloads the test fit and builds/predicts the model; the ``fit`` marker routes
+# it to the end-to-end CI job (skipped in a fast ``-m "not fit"`` run).
+pytestmark = pytest.mark.fit
 
 EPOCHS = [100, 1000]
 
