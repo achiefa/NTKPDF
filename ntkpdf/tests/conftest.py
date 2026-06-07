@@ -14,7 +14,7 @@ import pytest
 # A small NTK fit (3 replicas, epoch snapshots 100..1000) hosted on the NNPDF
 # server; ``FallbackLoader`` downloads it on demand. Used by the end-to-end
 # eigenvalue tests. The fit-free config tests do not need it.
-FIT = "260607-ac-serial"
+FIT = "260607-ac-sequential"
 
 
 @pytest.fixture(scope="session")
