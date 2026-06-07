@@ -24,6 +24,7 @@ jax = "*"
 # intentionally NOT pinned here -- a second pin would have to be byte-identical or
 # Poetry's resolver would conflict (strategy A).
 colibri = { git = "https://github.com/HEP-PBSP/colibri.git", branch = "ntk" }
+colibri_n3fit = { git = "https://github.com/HEP-PBSP/colibri-n3fit.git", branch = "layer_selector" }
 
 
 [tool.poetry.extras]
