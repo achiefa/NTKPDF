@@ -34,8 +34,12 @@ def _data(grid):
 
 def test_pdf_grid_all_epochs_are_per_epoch():
     """The collect yields one grid per epoch, each matching the single-epoch
-    production for *that* epoch (not the last epoch repeated)."""
-    grids = API.pdf_grid_all_epochs(fit=FIT, custom_epochs=EPOCHS)
+    production for *that* epoch (not the last epoch repeated).
+
+    ``pdf_grid_all_epochs`` collects over the ``Epochspecs`` namespace (the
+    ``--epochs`` the user passes), so the epochs are supplied that way -- not via
+    ``custom_epochs`` (which only limits the trajectory grids)."""
+    grids = API.pdf_grid_all_epochs(fit=FIT, Epochspecs=[{"epoch": e} for e in EPOCHS])
 
     assert len(grids) == len(EPOCHS)
 

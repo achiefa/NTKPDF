@@ -34,6 +34,8 @@ Loss functions
 --------------
 [Loss functions all replicas]({@loss_report report@})
 
+[Ensemble loss function]({@loss_ensemble_report report@})
+
 PDFs at epochs
 --------------
 {@with Epochspecs@}
@@ -51,4 +53,10 @@ Feature eigenmodes
 ------------------
 {@with Eigenvaluesconfigs@}
 [Plots H ({@title_eigenvalues@})]({@h_val_report report@})
+{@endwith@}
+
+Features
+--------
+{@with Eigenvaluesconfigs@}
+[Features q ({@title_eigenvalues@})]({@feature_report report@})
 {@endwith@}

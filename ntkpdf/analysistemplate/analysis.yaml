@@ -22,7 +22,7 @@ pdfs:
 fits:
   - from_: current
 
-custom_epochs: [500, 1000, 2000, 5000]
+custom_epochs: [500, 1000, 5000]
 
 # Note: singular `fit` is injected directly (not via `from_: current`) by
 # ntkanalysis.complete_mapping. Using `from_` here would taint config resolution
@@ -99,6 +99,13 @@ PDFscalespecs:
   - xscale: linear
     Xscaletitle: Linear
 
+# Ensemble loss band convention (consumed by plot_losses_ensemble). For now we
+# want the central value (mean) +- 1 standard deviation, so show_std is on and
+# the 68% interval is off. Switch to mean + 68% with show_std: False, show_68: True.
+central_value: mean
+show_std: True
+show_68: False
+
 # +++++++++++++++++++
 #     Templates
 # +++++++++++++++++++
@@ -114,6 +121,10 @@ loss_report:
     meta: Null
     template: loss_all_replicas.md
 
+loss_ensemble_report:
+    meta: Null
+    template: loss_ensemble.md
+
 pdf_epochs_report:
     meta: Null
     template: pdf_at_epochs.md
@@ -125,6 +136,10 @@ pdf_all_epochs_report:
 h_val_report:
     meta: Null
     template: h_vals.md
+
+feature_report:
+    meta: Null
+    template: features.md
 
 template: report.md
 
@@ -143,6 +158,13 @@ theory:
   from_: fit
 theoryid:
   from_: theory
+
+# n3fit model output flavour order (EVOL_LIST), handed to colibri's eigenvector
+# providers so the NTK-decomposition's label-aligned matmul matches the FK/M tables
+# (which are EVOL_LIST-labelled). Required by the feature pages
+# (compute_ntk_decomposition_ensemble); the eigenvalue/h pages use the positional
+# path and do not need it. Same list the notebook/API calls pass as evol_fl_names.
+evol_fl_names: [photon, sigma, gluon, V, V3, V8, V15, V24, V35, T3, T8, T15, T24, T35]
 
 dataspecs:
   - theoryid:

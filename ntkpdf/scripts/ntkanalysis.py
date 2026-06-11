@@ -49,6 +49,14 @@ class CompareFitApp(App):
                  "saved weights in the fit (see fit_replicas/.../parameters).",
         )
         parser.add_argument(
+            '--replicas',
+            nargs='+',
+            type=int,
+            default=None,
+            help="1-based replica id(s) for the single-replica feature/eigenvalue "
+                 "pages (one figure per replica). If omitted, those pages are skipped.",
+        )
+        parser.add_argument(
             '--show-fakepdf',
             dest='show_fakepdf',
             action='store_true',
@@ -178,6 +186,13 @@ class CompareFitApp(App):
         # One namespace entry per user-selected epoch; the PDF-at-epochs report
         # page iterates over these. Empty (default) -> that page renders nothing.
         autosettings['Epochspecs'] = [{'epoch': e} for e in (args.get('epochs') or [])]
+
+        # One namespace entry per user-selected replica; the single-replica
+        # feature/eigenvalue pages iterate over these (one figure per replica).
+        # Empty (default) -> those pages render nothing.
+        autosettings['Replicaspecs'] = [
+            {'replica_index': r} for r in (args.get('replicas') or [])
+        ]
 
         # Whether to overlay the closure-test underlying-law PDF on those plots.
         autosettings['show_fakepdf'] = bool(args.get('show_fakepdf'))

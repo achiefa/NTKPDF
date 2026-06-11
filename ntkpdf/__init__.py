@@ -1,4 +1,4 @@
-__init__.py import logging
+import logging
 import os
 
 # Match the environment the analysis notebooks/scripts expect, *before* any
@@ -17,4 +17,4 @@ for _name in ("validphys", "n3fit", "keras"):
     logging.getLogger(_name).setLevel(logging.ERROR)
 
 # Setup plotting style
-setup()__init__.py
+setup()

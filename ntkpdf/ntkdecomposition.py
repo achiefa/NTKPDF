@@ -5,6 +5,7 @@ Module for the decomposition of the PDFs into their NTK components.
 """
 from dataclasses import dataclass, field
 import logging
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -300,6 +301,116 @@ def compute_ntk_decomposition_ensemble(
         Fk=FK,
         Cinv=Cinv,
     )
+
+
+def evolution_operator(compute_ntk_decomposition_ensemble) -> EvolutionOperator:
+    """The NTK :class:`EvolutionOperator` linearised at a reference epoch -- a
+    friendly named alias for ``compute_ntk_decomposition_ensemble``.
+
+    The **reference time** is the epoch at which the NTK is evaluated; it flows in
+    through ``eigenvalues_at_epoch`` / ``eigenvectors_at_epoch`` (both keyed on
+    ``epoch``). The returned operator is time-independent -- the *evolution* time
+    ``t`` is supplied to its methods (``__call__`` / ``u`` / ``v`` /
+    ``plotting_grid*``), e.g. ``t = epoch * learning_rate`` to evolve up to the
+    reference time.
+
+    This is a regular **provider**, not a ``produce_`` rule. It is built from other
+    *providers* (``eigenvalues_at_epoch`` / ``eigenvectors_at_epoch`` and the
+    FK/Cinv/M chain), and a ``produce_`` rule can only depend on config inputs and
+    other ``produce_`` productions -- never on the provider DAG -- so a production
+    here raises ``InputNotFoundError: A parameter is required: eigenvalues_at_epoch``.
+    """
+    return compute_ntk_decomposition_ensemble
+
+
+def _feature_grid_from_columns(col, flavours, xgrid, basis):
+    """Wrap an ``(m, n)`` block of ``q`` columns (``m`` replicas, ``n =
+    n_flavours * n_xgrid``) as an ``XPlottingGrid`` -- reshape each replica to
+    ``(n_flavours, n_xgrid)`` and route through ``plotting_grid_from_ntkstat``
+    (exactly as ``EvolutionOperator.plotting_grid``)."""
+    stats = NTKStats(col).reshape((len(flavours), len(xgrid)))
+    return plotting_grid_from_ntkstat(stats, np.asarray(xgrid), basis, flavours)
+
+
+def feature_grids_at_epoch(
+    compute_ntk_decomposition_ensemble,
+    rank_indices: list,
+    replica_index: Optional[int] = None,
+    basis: str = "evolution",
+) -> list:
+    """Per-rank feature grids (the ``q`` columns) at one epoch, as ``XPlottingGrid``s.
+
+    The :class:`EvolutionOperator` built for this epoch by
+    ``compute_ntk_decomposition_ensemble`` holds ``q`` as an ``NTKStats``
+    ``(nreplicas, n, n)``; column ``k-1`` is feature/rank ``k`` -- a vector over the
+    ``(flavour, x)`` feature space (the same space a PDF lives in, ``n =
+    n_flavours * n_xgrid``). We slice that column, reshape each replica to
+    ``(n_flavours, n_xgrid)`` and wrap it as an ``XPlottingGrid``, so a feature plots
+    like a PDF: value vs ``x``, one figure per flavour.
+
+    Grids are built on the model output order (``EVOL_LIST``, evolution basis,
+    ``XGRID``) -- identical to ``pdf_grid_at_epoch`` -- so they share a flavour axis
+    with the PDF grids and the ``plot_grids`` flavour defaults apply unchanged.
+
+    ``rank_indices`` is 1-based (the ``Rankspecs`` convention, matching colibri's
+    ``EigenvalueGrid.get_plotting_data``); one grid is returned per rank, in order.
+
+    **Padding.** ``compute_ntk_decomposition`` pads each replica's ``Q`` with
+    *zero* columns beyond that replica's natural cut (``pad=True``), so for rank
+    ``k`` any replica with ``cut < k`` carries an all-zero -- i.e. *absent* --
+    feature. These are not real features:
+
+    - ``replica_index is None`` (ensemble): such replicas are **masked out** per
+      rank via ``EvolutionOperator.cuts``, so the central value/band is taken only
+      over replicas that actually have that mode (otherwise the zeros drag it to 0).
+    - ``replica_index`` given (single replica, 1-based): that replica's column is
+      sliced directly (no masking, so the replica axis still maps 1:1 to ids). If
+      the rank exceeds its cut the column is zero; we log a warning rather than
+      silently drawing a flat zero.
+    """
+    evo = compute_ntk_decomposition_ensemble
+    q = evo.q.data                       # (nreplicas, n, n)
+    cuts = np.asarray(evo.cuts)          # (nreplicas,) per-replica perp-mode count
+    flavours = list(evo.flavours)
+    xgrid = np.asarray(evo.xgrid)
+    n_ranks = q.shape[2]
+
+    grids = []
+    for rank in rank_indices:
+        if not (1 <= rank <= n_ranks):
+            raise ValueError(f"rank {rank} out of range [1, {n_ranks}]")
+
+        if replica_index is None:
+            valid = cuts >= rank                      # drop zero-padded replicas
+            if not valid.any():
+                raise ValueError(
+                    f"rank {rank} exceeds every replica's cut (max {int(cuts.max())}); "
+                    "no replica has this feature."
+                )
+            n_dropped = int((~valid).sum())
+            if n_dropped:
+                log.warning(
+                    "Feature q^(%d): %d/%d replicas have cut < %d (zero-padded / "
+                    "absent feature) and are excluded from the ensemble band; it is "
+                    "taken over the remaining %d replica(s).",
+                    rank, n_dropped, valid.size, rank, int(valid.sum()),
+                )
+            col = q[valid, :, rank - 1]               # (n_valid, n)
+        else:
+            if not (1 <= replica_index <= q.shape[0]):
+                raise ValueError(
+                    f"replica_index {replica_index} out of range [1, {q.shape[0]}]"
+                )
+            if cuts[replica_index - 1] < rank:
+                log.warning(
+                    "Replica %d has cut %d < rank %d: its q^(%d) feature is "
+                    "zero-padded (absent) and will plot as flat zero.",
+                    replica_index, int(cuts[replica_index - 1]), rank, rank,
+                )
+            col = q[replica_index - 1: replica_index, :, rank - 1]   # (1, n)
+
+        grids.append(_feature_grid_from_columns(col, flavours, xgrid, basis))
+    return grids
 
 
 # ---------------------------------------------------------------------------
