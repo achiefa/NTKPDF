@@ -70,9 +70,10 @@ def plot_feature_eigvals_by_fit(
     yscale: Optional[str] = None,
     ymin: Optional[float] = None,
     ymax: Optional[float] = None,
+    legend_outside: bool = False,
 ):
     """Plot eigenvalues, one figure per fit showing multiple ranks."""
-    
+
     yield from ntk_plot_provider(
         h_val_grids_by_fit,
         rank_indices,
@@ -85,6 +86,7 @@ def plot_feature_eigvals_by_fit(
         yscale=yscale,
         ymin=ymin,
         ymax=ymax,
+        legend_outside=legend_outside,
     )
 
 
@@ -106,6 +108,7 @@ def plot_feature_eigvals_replica_by_fit(
     yscale: Optional[str] = None,
     ymin: Optional[float] = None,
     ymax: Optional[float] = None,
+    legend_outside: bool = False,
 ):
     """Single-replica feature eigenvalues h^(k) vs epoch: one figure per fit, the
     ranks in the group as individual lines for replica ``replica_index`` (1-based,
@@ -124,6 +127,7 @@ def plot_feature_eigvals_replica_by_fit(
         yscale=yscale,
         ymin=ymin,
         ymax=ymax,
+        legend_outside=legend_outside,
     )
 
 
@@ -136,6 +140,7 @@ def plot_eigvals_replica_by_fit(
     yscale: Optional[str] = None,
     ymin: Optional[float] = None,
     ymax: Optional[float] = None,
+    legend_outside: bool = False,
 ):
     """Single-replica NTK eigenvalues lambda^(k) vs epoch: one figure per fit, the
     ranks in the group as individual lines for replica ``replica_index`` (1-based,
@@ -155,4 +160,5 @@ def plot_eigvals_replica_by_fit(
         yscale=yscale,
         ymin=ymin,
         ymax=ymax,
+        legend_outside=legend_outside,
     )

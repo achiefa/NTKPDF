@@ -118,6 +118,7 @@ def plot_features_at_epoch(
     xscale='log',
     xlim=None,
     ylim=None,
+    legend_outside=False,
     ):
     """One figure per flavour of the feature columns ``q^(k)`` at one training
     epoch, overlaying the ranks of the current ``Rankspecs`` group as ensemble
@@ -151,7 +152,8 @@ def plot_features_at_epoch(
                           xscale=xscale,
                           yscale="linear",
                           xlim=xlim,
-                          ylim=ylim
+                          ylim=ylim,
+                          legend_outside=legend_outside,
                           )
 
 
@@ -167,6 +169,7 @@ def plot_features_at_epoch_single_replica(
     xscale='log',
     xlim=None,
     ylim=None,
+    legend_outside=False,
     ):
     """Single-replica version of :func:`plot_features_at_epoch`: the feature columns
     ``q^(k)`` of one replica (``replica_index``, 1-based, from ``Replicaspecs``)
@@ -190,7 +193,8 @@ def plot_features_at_epoch_single_replica(
                           xscale=xscale,
                           yscale="linear",
                           xlim=xlim,
-                          ylim=ylim
+                          ylim=ylim,
+                          legend_outside=legend_outside,
                           )
 
 

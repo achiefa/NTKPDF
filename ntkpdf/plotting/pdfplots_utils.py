@@ -60,6 +60,7 @@ def plot_grids(grids: list[XPlottingGrid],
                normalise_to: int = None,
                separate_axis: list[int] = None,
                kwargs_twinx: dict = {},
+               legend_outside: bool = False,
                **kwargs,
                ):
     plot_provider = select_draw(plot_provider)
@@ -99,7 +100,16 @@ def plot_grids(grids: list[XPlottingGrid],
 
         ax.set_xlabel(r"$x$")
         ax.set_ylabel(ylabels[flidx] if ylabels else rf"${fl}$")
-        ax.legend(handles=handles, labels=labels or [""] * len(handles), loc="best", handler_map={HandlerSpec: ComposedHandler()})
+        # With many overlaid curves the in-plot legend hides the data; `legend_outside`
+        # anchors it to the right of the axes instead (reportengine saves with
+        # bbox_inches='tight', so it is not clipped).
+        legend_kw = (
+            {"loc": "upper left", "bbox_to_anchor": (1.01, 1.0)}
+            if legend_outside
+            else {"loc": "best"}
+        )
+        ax.legend(handles=handles, labels=labels or [""] * len(handles),
+                  handler_map={HandlerSpec: ComposedHandler()}, **legend_kw)
 
         for key, val in kwargs.items():
           if isinstance(val, dict):

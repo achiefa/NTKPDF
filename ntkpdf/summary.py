@@ -20,6 +20,7 @@ def ntk_fit_summary(fit_name_with_covmat_label, nreplicas, model_info):
           (r"Layer type", f"{model_info['layer_type']}"),
           (r"Initializer", f"{model_info['initializer']}"),
           (r"Initializer scale", f"{model_info['initializer_scale']}"),
+          (r"Initializer gamma", f"{model_info['initializer_gamma']}"),
           (r"Dropout", f"{model_info['dropout']}"),
           (r"Optimizer", f"{model_info['optimizer']}"),
           (r"Learning rate", f"{model_info['learning_rate']}"),
