@@ -274,6 +274,10 @@ class ntkConfig(colibriConfig):
             "activations": fit_info["parameters"]["activation_per_layer"],
             "initializer": fit_info["parameters"]["initializer"],
             "initializer_scale": fit_info["parameters"].get("initializer_scale", 1.0),
+            # Read back the init-width exponent the fit used (default 1.0 = standard
+            # glorot) so the rebuilt network-at-initialisation -- used as f0 -- matches
+            # the fit's actual initialisation, not a default one.
+            "initializer_gamma": fit_info["parameters"].get("initializer_gamma", 1.0),
             "layer_type": fit_info["parameters"]["layer_type"],
             "dropout": fit_info["parameters"]["dropout"],
             "impose_sumrule": fit_info.get('sum_rules', "All"),
@@ -317,6 +321,7 @@ class ntkConfig(colibriConfig):
               architecture=model_info["layer_type"],
               initializer=model_info["initializer"],
               initializer_scale=model_info["initializer_scale"],
+              initializer_gamma=model_info["initializer_gamma"],
               dropout_rate=model_info["dropout"],
               regularizer=None,
               regularizer_args={})
