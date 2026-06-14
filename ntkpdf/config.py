@@ -504,3 +504,32 @@ class ntkConfig(colibriConfig):
         eigvals = eigensystem.iloc[:, 0].values
         eigvecs = eigensystem.iloc[:, 1:]
         return eigvals, eigvecs
+
+    def produce_ntk_fast_kernel_arrays(self, fit, padding=True, flavour_basis=False):
+        """FK tables for the fit's data, built **once** as a production, anchored to ``fit``.
+
+        A production (not a provider) for the same reason as
+        ``fitting_covmat_eigensystem``: the FK is a per-fit constant, and as a provider
+        it resolved to a separate node per presentation leaf (~200x) -> reloaded +
+        retained -> OOM.
+
+        The subtlety: it must depend on ``fit`` (a *direct value*, anchored to the few
+        fit-contexts where ``fit`` is defined), **not** on the global ``data``
+        (``produce_data``, a *production* that floats to every request site). Depending
+        on the floating ``data`` kept the downstream ``fk``/``m_matrix`` pinned per-leaf
+        even though this production has 0 exec nodes. So we build the fit's ``data``
+        here, inside the fit's own data context (``fitcontextwithcuts``), which keeps the
+        whole FK -> ``fk`` -> ``m_matrix`` chain anchored to ``fit`` and collapsed to a
+        handful of nodes. The FK build itself is unchanged
+        (``data_theory._build_ntk_fast_kernel_arrays``); verify node-count + bit-identical.
+        """
+        ctx = self.produce_fitcontextwithcuts(fit, self.produce_fitinputcontext(fit))
+        with self.set_context(ns=self._curr_ns.new_child(
+            {"theoryid": ctx["theoryid"], "use_cuts": ctx["use_cuts"]}
+        )):
+            data = self.produce_data(data_input=ctx["dataset_inputs"])
+
+        # Lazy import: data_theory imports from this module (avoid a circular import).
+        from ntkpdf.data_theory import _build_ntk_fast_kernel_arrays
+
+        return _build_ntk_fast_kernel_arrays(data, padding=padding, flavour_basis=flavour_basis)

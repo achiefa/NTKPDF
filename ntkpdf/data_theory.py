@@ -17,6 +17,8 @@ from colibri.constants import EXPORT_LABELS, XGRID
 from n3fit.layers.DIS import DIS
 from n3fit.layers.observable import compute_float_mask
 from reportengine import collect
+from validphys.pseudodata import read_replica_pseudodata
+from validphys.results import data_index
 
 from ntkpdf.config import set_epoch_weights, predict_pdf_grid
 from ntkpdf.utils import (
@@ -124,12 +126,24 @@ class LossGrid(NTKGrid):
 # Main data/theory utilities meant to be used as providers
 ##################################################################
 
-def ntk_fast_kernel_arrays(data, groups_index, padding=True, flavour_basis=False) -> pd.DataFrame:
+def _build_ntk_fast_kernel_arrays(data, padding=True, flavour_basis=False) -> pd.DataFrame:
+    """Build the FK tables as a pandas DataFrame. Internal helper.
+
+    Exposed to the report as the production ``ntk_fast_kernel_arrays``
+    (``ntkConfig.produce_ntk_fast_kernel_arrays``), **not** as a provider: ``data`` is
+    a validphys *production* (``produce_data``) available in every namespace, so a
+    *provider* depending on it resolves to a separate node per presentation leaf
+    (~200x) -> reloaded + retained -> OOM. As a production this FK is evaluated once at
+    graph-build (like ``fitting_covmat_eigensystem``); ``fk``/``m_matrix`` then anchor
+    to the shallow ``train_val_masks`` node and collapse to a handful.
+
+    The per-dataset ``(dataset, id)`` row index uses validphys's ``data_index(data)``
+    (dropping its top ``experiment`` level) rather than the ``groups_index`` provider:
+    ``groups_index`` hangs off the ``groups_data`` collect; ``data_index`` doesn't, and
+    the ``(dataset, id)`` labels are identical (both iterate ``ds.cuts.load()`` per
+    dataset, and this loop selects per ``ds.name``).
     """
-    Return the FK tables as a pandas DataFrame for a given fit name.
-    """
-    # Sha
-    groups_index_nogroup = groups_index.droplevel("group")
+    groups_index_nogroup = data_index(data).droplevel("experiment")
 
     lumi_indices = None
     blocks = []
@@ -192,7 +206,46 @@ def ntk_fast_kernel_arrays(data, groups_index, padding=True, flavour_basis=False
     return FK_df
 
 
-def get_fit_pseudodata(fit, read_fit_pseudodata, groups_index, psd_type="all"):
+def fit_pseudodata(fit):
+    """Per-replica fit pseudodata, read **once**, by looping the single-replica reader.
+
+    Build-once replacement for depending on validphys's ``read_fit_pseudodata``,
+    which is a reportengine ``collect`` (``collect('read_replica_pseudodata',
+    ('fitreplicas', 'fitcontextwithcuts'))``). A ``collect`` is *re-made at every
+    request site*, so every provider that consumed it inherited that: the whole
+    metric chain -- ``train_val_masks`` -> ``fk_diagonal_basis_train_val`` /
+    ``cinv_diagonal_basis_train_val`` -> ``m_matrix_train_val``, and (via the
+    ``context_index`` collect that ``read_replica_pseudodata`` pulls in)
+    ``ntk_fast_kernel_arrays`` -- became a *separate DAG node per presentation leaf*
+    (~200x on the full report), each one reloading and *retaining* the pseudodata.
+    Since nothing is freed, that was the OOM.
+
+    By importing the single-replica ``read_replica_pseudodata`` and looping here, this
+    provider has **no collect in its subtree** and depends only on ``fit`` (a genuine
+    per-fit constant). reportengine therefore resolves it (and everything downstream)
+    to a *single shared node*, collapsing the chain to 1 node each. Verify with a DAG
+    node-count: ``m_matrix_train_val`` should drop from ~200 to 1.
+
+    Returns the same ``list[DataTrValSpec]`` as ``read_fit_pseudodata`` (one entry per
+    replica). ``context_index`` is only read by ``read_replica_pseudodata`` in the
+    legacy ``diagonal_basis=False`` branch -- which this metric chain does not support
+    (the consumers raise) -- so we pass ``None`` and guard here for a clear error.
+    """
+    if not fit.as_input().get("diagonal_basis", True):
+        raise ValueError(
+            f"Fit {fit.name} was not run with diagonal_basis=True; "
+            "fit_pseudodata expects a diagonal-basis fit."
+        )
+    # Postfit replica directories under nnfit/ (replica_1, replica_2, ...), in order.
+    replica_dirs = sorted(
+        (p for p in (fit.path / "nnfit").glob("replica_*") if p.is_dir()),
+        key=lambda p: int(p.name.split("_")[1]),
+    )
+    replicas = [int(p.name.split("_")[1]) for p in replica_dirs]
+    return [read_replica_pseudodata(fit, None, replica) for replica in replicas]
+
+
+def get_fit_pseudodata(fit, fit_pseudodata, groups_index, psd_type="all"):
     """
     Get the pseudodata for a given fit name using the NTK stats. Returns an
     :class:`NTKStats` of one-column DataFrames, one per replica.
@@ -209,7 +262,7 @@ def get_fit_pseudodata(fit, read_fit_pseudodata, groups_index, psd_type="all"):
 
     ``psd_type`` is one of ``"all"``, ``"train"``, ``"val"``.
     """
-    pseudo_data = read_fit_pseudodata
+    pseudo_data = fit_pseudodata
     diagonal = fit.as_input().get("diagonal_basis", True)
 
     if not diagonal:
@@ -237,7 +290,7 @@ def get_fit_pseudodata(fit, read_fit_pseudodata, groups_index, psd_type="all"):
     return NTKStats(raw_data)
 
 
-def train_val_masks(fit, read_fit_pseudodata):
+def train_val_masks(fit, fit_pseudodata):
     """
     Per-replica boolean train and validation masks, aligned with the full
     eigenmode-sorted pseudodata index.
@@ -256,7 +309,7 @@ def train_val_masks(fit, read_fit_pseudodata):
             f"Fit {fit.name} was not run with diagonal_basis=True; "
             "train_val_masks expects a diagonal-basis fit."
         )
-    pseudo_data = read_fit_pseudodata
+    pseudo_data = fit_pseudodata
 
     tr_frames, val_frames = [], []
     for pdr in pseudo_data:
@@ -271,14 +324,14 @@ def train_val_masks(fit, read_fit_pseudodata):
     return NTKStats(tr_frames), NTKStats(val_frames)
 
 
-def get_train_val_data(fit, read_fit_pseudodata):
+def get_train_val_data(fit, fit_pseudodata):
     is_diagonal = fit.as_input().get("diagonal_basis", True)
     if not is_diagonal:
         raise ValueError(
             f"Fit {fit.name} was not run with diagonal_basis=True; "
             "train_val_masks expects a diagonal-basis fit."
         )
-    pseudo_data = read_fit_pseudodata
+    pseudo_data = fit_pseudodata
     tr_data_list, val_data_list = [], []
     for pdr in pseudo_data:
         data = pdr.pseudodata.reindex(

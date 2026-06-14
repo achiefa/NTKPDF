@@ -466,19 +466,25 @@ def feature_grids_at_epoch(
         if replica_index is None:
             valid = cuts >= rank                      # drop zero-padded replicas
             if not valid.any():
-                raise ValueError(
-                    f"rank {rank} exceeds every replica's cut (max {int(cuts.max())}); "
-                    "no replica has this feature."
-                )
-            n_dropped = int((~valid).sum())
-            if n_dropped:
+                # No replica reaches this mode (rank > every replica's cut). Plot it
+                # as flat zero -- consistent with the single-replica branch below --
+                # rather than aborting the whole report: this is the expected case
+                # when Rankspecs request more modes than a (small) fit's NTK provides.
                 log.warning(
-                    "Feature q^(%d): %d/%d replicas have cut < %d (zero-padded / "
-                    "absent feature) and are excluded from the ensemble band; it is "
-                    "taken over the remaining %d replica(s).",
-                    rank, n_dropped, valid.size, rank, int(valid.sum()),
+                    "Feature q^(%d): no replica has this mode (all cuts < %d, max %d); "
+                    "plotted as flat zero.", rank, rank, int(cuts.max()),
                 )
-            col = q[valid, :, rank - 1]               # (n_valid, n)
+                col = np.zeros((1, q.shape[1]))       # (1, n) flat zero
+            else:
+                n_dropped = int((~valid).sum())
+                if n_dropped:
+                    log.warning(
+                        "Feature q^(%d): %d/%d replicas have cut < %d (zero-padded / "
+                        "absent feature) and are excluded from the ensemble band; it is "
+                        "taken over the remaining %d replica(s).",
+                        rank, n_dropped, valid.size, rank, int(valid.sum()),
+                    )
+                col = q[valid, :, rank - 1]           # (n_valid, n)
         else:
             if not (1 <= replica_index <= q.shape[0]):
                 raise ValueError(
