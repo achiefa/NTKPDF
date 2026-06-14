@@ -1,3 +1,5 @@
+import logging
+import re
 from functools import partial
 from typing import Optional
 
@@ -10,6 +12,81 @@ from colibri.ntk.plotntk import (
     iter_by_fit,
     _figuregen
 )
+
+from ntkpdf.utils import peak_rss_gb
+
+log = logging.getLogger(__name__)
+
+
+def _slug(text):
+    """Filename-safe slug for a title fragment."""
+    return re.sub(r"[^0-9A-Za-z]+", "_", str(text)).strip("_") or "x"
+
+
+def _grouped_trajectory_plots(
+    grids_by_fit,
+    Rankspecs,
+    *,
+    ylabel,
+    name_kind,
+    PDFscalespecs=None,
+    Replicaspecs=None,
+    error_type="mean",
+    legend_outside=False,
+    ymin=None,
+    ymax=None,
+):
+    """Shared engine for the per-(fit, name) eigenvalue trajectory pages.
+
+    The grid collect (``grids_by_fit``) is resolved **once** -- the calling provider
+    is invoked a single time per (fit, name), *outside* any ``{@with ...@}`` loop --
+    and the rank groups (``Rankspecs``), x-scales (``PDFscalespecs``) and replicas
+    (``Replicaspecs``) are iterated here in Python. So the heavy (e.g. ~400-epoch)
+    grid is built once instead of re-collected at every presentation leaf, which is
+    what exhausted memory before (reportengine re-makes a ``collect`` -- and its whole
+    subtree -- at every request site, and never frees the results).
+
+    ``Replicaspecs is None`` -> ensemble bands; a list (possibly empty) -> single-
+    replica line plots, one set per selected replica (empty list -> nothing).
+    """
+    scalespecs = PDFscalespecs or [{}]
+    if Replicaspecs is None:
+        replicas = [None]                                       # ensemble
+    else:
+        replicas = [r["replica_index"] for r in Replicaspecs]   # [] -> no figures
+
+    for ridx in replicas:
+        if ridx is None:
+            draw_fn = partial(draw_band, error_type=error_type)
+            handler_kw = {}                                      # ntk_plot_provider band default
+            rep_tag, rep_title = "", ""
+        else:
+            draw_fn = partial(_draw_one_replica, replica_index=ridx)
+            handler_kw = {"custom_handler": None}                # single line -> plain legend
+            rep_tag, rep_title = f"replica_{ridx}_", rf" ($\rm replica\ {ridx}$)"
+
+        for sspec in scalespecs:
+            xscale = sspec.get("xscale")
+            xtitle = sspec.get("Xscaletitle", "")
+            for rspec in Rankspecs:
+                rtitle = rspec.get("rank_title", "")
+                yield from ntk_plot_provider(
+                    grids_by_fit,
+                    rspec["rank_indices"],
+                    draw_fn=draw_fn,
+                    iterator_fn=iter_by_fit,
+                    title_fn=(lambda grid, rt=rtitle, xt=xtitle, rp=rep_title:
+                              f"{grid.label}{rp} -- {rt}" + (f" ({xt})" if xt else "")),
+                    name_fn=(lambda grid, rt=rtitle, xt=xtitle, rp=rep_tag, nk=name_kind:
+                             f"{nk}_{rp}{grid.label}_{_slug(rt)}" + (f"_{_slug(xt)}" if xt else "")),
+                    ylabel_fn=lambda _: ylabel,
+                    xscale=xscale,
+                    yscale=rspec.get("yscale"),
+                    ymin=ymin,
+                    ymax=ymax,
+                    legend_outside=legend_outside,
+                    **handler_kw,
+                )
 
 
 def _draw_one_replica(ax, xgrid, stats, label, replica_index, handles=None, labels=None):
@@ -161,4 +238,98 @@ def plot_eigvals_replica_by_fit(
         ymin=ymin,
         ymax=ymax,
         legend_outside=legend_outside,
+    )
+
+
+# =============================================================================
+# Grouped providers: resolve the grid ONCE per (fit, name), loop ranks/scales/
+# replicas internally. The report calls these directly (no {@with ...@} loops),
+# which is what keeps the heavy NTK grid from being rebuilt at every leaf.
+# =============================================================================
+
+_LAMBDA_YLABEL = r"$\textrm{NTK eigenvalues}$"
+_H_YLABEL = r"$\textrm{Feature eigenvalues}$"
+
+
+@_figuregen
+def plot_eigvals_grouped(
+    eigval_grids_by_fit,
+    Rankspecs,
+    error_type: str = "mean",
+    legend_outside: bool = False,
+    ymin: Optional[float] = None,
+    ymax: Optional[float] = None,
+):
+    """Ensemble NTK eigenvalues lambda^(k) vs epoch -- one figure per ``Rankspecs``
+    group. The eigenvalue grid is resolved once here (call this once per fit/name)."""
+    log.info("[plot] NTK eigenvalues (ensemble): %d rank group(s) | peak RSS %.1f GB",
+             len(Rankspecs), peak_rss_gb())
+    yield from _grouped_trajectory_plots(
+        eigval_grids_by_fit, Rankspecs,
+        ylabel=_LAMBDA_YLABEL, name_kind="eigvals",
+        error_type=error_type, legend_outside=legend_outside, ymin=ymin, ymax=ymax,
+    )
+
+
+@_figuregen
+def plot_eigvals_replicas_grouped(
+    eigval_grids_by_fit,
+    Rankspecs,
+    Replicaspecs,
+    legend_outside: bool = False,
+    ymin: Optional[float] = None,
+    ymax: Optional[float] = None,
+):
+    """Single-replica NTK eigenvalues -- one figure per (selected replica, Rankspecs
+    group). Empty ``Replicaspecs`` -> nothing. Grid resolved once."""
+    log.info("[plot] NTK eigenvalues (single replicas): %d replica(s) x %d rank "
+             "group(s) | peak RSS %.1f GB", len(Replicaspecs), len(Rankspecs), peak_rss_gb())
+    yield from _grouped_trajectory_plots(
+        eigval_grids_by_fit, Rankspecs, Replicaspecs=Replicaspecs,
+        ylabel=_LAMBDA_YLABEL, name_kind="eigvals",
+        legend_outside=legend_outside, ymin=ymin, ymax=ymax,
+    )
+
+
+@_figuregen
+def plot_feature_eigvals_grouped(
+    h_val_grids_by_fit,
+    Rankspecs,
+    PDFscalespecs=None,
+    error_type: str = "mean",
+    legend_outside: bool = False,
+    ymin: Optional[float] = None,
+    ymax: Optional[float] = None,
+):
+    """Ensemble feature eigenvalues h^(k) vs epoch -- one figure per (x-scale,
+    Rankspecs group). The h grid is resolved once here (call this once per
+    fit/name)."""
+    log.info("[plot] feature eigenvalues h (ensemble): %d rank group(s) | peak RSS %.1f GB",
+             len(Rankspecs), peak_rss_gb())
+    yield from _grouped_trajectory_plots(
+        h_val_grids_by_fit, Rankspecs, PDFscalespecs=PDFscalespecs,
+        ylabel=_H_YLABEL, name_kind="h",
+        error_type=error_type, legend_outside=legend_outside, ymin=ymin, ymax=ymax,
+    )
+
+
+@_figuregen
+def plot_feature_eigvals_replicas_grouped(
+    h_val_grids_by_fit,
+    Rankspecs,
+    Replicaspecs,
+    PDFscalespecs=None,
+    legend_outside: bool = False,
+    ymin: Optional[float] = None,
+    ymax: Optional[float] = None,
+):
+    """Single-replica feature eigenvalues -- one figure per (selected replica,
+    x-scale, Rankspecs group). Empty ``Replicaspecs`` -> nothing. Grid resolved
+    once."""
+    log.info("[plot] feature eigenvalues h (single replicas): %d replica(s) x %d rank "
+             "group(s) | peak RSS %.1f GB", len(Replicaspecs), len(Rankspecs), peak_rss_gb())
+    yield from _grouped_trajectory_plots(
+        h_val_grids_by_fit, Rankspecs, PDFscalespecs=PDFscalespecs,
+        Replicaspecs=Replicaspecs, ylabel=_H_YLABEL, name_kind="h",
+        legend_outside=legend_outside, ymin=ymin, ymax=ymax,
     )

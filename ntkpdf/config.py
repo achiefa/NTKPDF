@@ -472,3 +472,35 @@ class ntkConfig(colibriConfig):
 
         fakepdf = self.produce_fakepdf(fit)
         return xplotting_grid(fakepdf, 1.65, XGRID, "evolution", EVOL_LIST)
+
+    def produce_fitting_covmat_eigensystem(self, fit, fitting_covmat_name):
+        """Eigendecomposition of the fitting covariance matrix, loaded **once**.
+
+        This is a *production* (not a plain provider) on purpose: the eigenvector
+        matrix is ``(Ndata, Ndata)`` -- hundreds of MB -- and a genuine per-fit
+        constant, but the consumers (`fk_diagonal_basis_train_val` etc.) are resolved
+        inside the report's nested ``{@with ...@}`` loops. As a provider it was
+        recomputed *and retained* once per presentation leaf (the from_: theory/dataset
+        taint, see CLAUDE.md), growing memory by ~0.6 GB/leaf -> OOM. As a production it
+        is evaluated once at graph-build and shared by every leaf.
+
+        The columns are deliberately left as read from disk: aligning them to the FK
+        index needs the ``ntk_fast_kernel_arrays`` provider (unavailable to a
+        production), so that cheap, idempotent relabelling is done by the single
+        consumer ``fk_diagonal_basis_train_val``.
+
+        Only valid for fits run with ``diagonal_basis=True``.
+        """
+        if not fit.as_input().get("diagonal_basis", True):
+            raise ConfigError(
+                f"Fit {fit.name} was not run with diagonal_basis=True; "
+                "fitting_covmat_eigensystem expects a diagonal-basis fit."
+            )
+        import pandas as pd
+
+        eigensystem = pd.read_csv(
+            fitting_covmat_name, index_col=[0], header=[0], sep="\t|,", engine="python",
+        )
+        eigvals = eigensystem.iloc[:, 0].values
+        eigvecs = eigensystem.iloc[:, 1:]
+        return eigvals, eigvecs

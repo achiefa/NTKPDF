@@ -4,6 +4,7 @@ ntk.data_theory.py
 Module that contains the data and theory utilities for the ntk app.
 """
 
+import logging
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -19,11 +20,14 @@ from reportengine import collect
 
 from ntkpdf.config import set_epoch_weights, predict_pdf_grid
 from ntkpdf.utils import (
-  flav_to_evol_matrix, 
-  IDX_TO_FKFLAV, 
-  EVOL_INDEX, 
-  FLAVOUR_INDEX
+  flav_to_evol_matrix,
+  IDX_TO_FKFLAV,
+  EVOL_INDEX,
+  FLAVOUR_INDEX,
+  peak_rss_gb,
 )
+
+log = logging.getLogger(__name__)
 
 FK_INDEX = EVOL_INDEX
 
@@ -233,39 +237,6 @@ def get_fit_pseudodata(fit, read_fit_pseudodata, groups_index, psd_type="all"):
     return NTKStats(raw_data)
 
 
-def fitting_covmat_eigensystem(fit, fitting_covmat_name, ntk_fast_kernel_arrays):
-    """
-    Load the eigendecomposition of the fitting covariance matrix from disk.
-
-    Only valid for fits run with ``diagonal_basis=True``. Reads the eigensystem
-    CSV produced by ``vp-setupfit`` and aligns the eigenvector columns to the
-    FK table index, so that ``eigvecs @ FK`` rotates FK from the (padded)
-    data basis into the diagonal covmat basis.
-
-    Returns
-    -------
-    eigvals : np.ndarray, shape (Ndata,)
-        Eigenvalues of the fitting covmat, ascending in the ``"eigenmode k"``
-        index.
-    eigvecs : pd.DataFrame, shape (Ndata, Ndata)
-        Eigenvectors with rows indexed by ``"eigenmode k"`` and columns aligned
-        to ``ntk_fast_kernel_arrays(fitname).index``.
-    """
-    is_diagonal = fit.as_input().get("diagonal_basis", True)
-    if not is_diagonal:
-        raise ValueError(
-            f"Fit {fit.name} was not run with diagonal_basis=True; "
-            "fitting_covmat_eigensystem expects a diagonal-basis fit."
-        )
-    eigensystem = pd.read_csv(
-        fitting_covmat_name, index_col=[0], header=[0], sep="\t|,", engine="python",
-    )
-    eigvals = eigensystem.iloc[:, 0].values
-    eigvecs = eigensystem.iloc[:, 1:]
-    eigvecs.columns = ntk_fast_kernel_arrays.index
-    return eigvals, eigvecs
-
-
 def train_val_masks(fit, read_fit_pseudodata):
     """
     Per-replica boolean train and validation masks, aligned with the full
@@ -353,6 +324,11 @@ def fk_diagonal_basis_train_val(fitting_covmat_eigensystem,
     """
     _, eigvecs = fitting_covmat_eigensystem
     FK = ntk_fast_kernel_arrays
+    # Align eigenvector columns to the FK index so the matmul rotates FK into the
+    # diagonal covmat basis. Done here (not in the production that loads the
+    # eigensystem) because the FK index needs the ntk_fast_kernel_arrays provider;
+    # this is an in-place, idempotent relabel of the shared (per-fit) eigvecs.
+    eigvecs.columns = ntk_fast_kernel_arrays.index
     FK_diag = eigvecs @ FK
     tr_masks, val_masks = train_val_masks
 
@@ -453,9 +429,17 @@ def loss_function_grid(fit,
     ndata_tr = tr_data.shape[0]
     ndata_vl = vl_data.shape[0]
 
+    stored_epochs = list(stored_epochs)
+    n_ep = len(stored_epochs)
+    log.info("[loss-grid] building for '%s': predicting over %d epochs | peak RSS %.1f GB",
+             fit.label, n_ep, peak_rss_gb())
+
     tr_loss_stats = {}
     vl_loss_stats = {}
-    for epoch in stored_epochs:
+    for i, epoch in enumerate(stored_epochs):
+        if i % 25 == 0 or i == n_ep - 1:
+            log.info("[loss-grid] epoch %d/%d (epoch=%s) | peak RSS %.1f GB",
+                     i + 1, n_ep, epoch, peak_rss_gb())
         # wreplica_paths and fit_preprocessing are both sorted by replica index,
         # so index idx refers to the same replica in each.
         weights = [

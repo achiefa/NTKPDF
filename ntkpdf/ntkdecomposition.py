@@ -17,7 +17,7 @@ from colibri.ntk.eigenvector import eigenvectors_ensemble_at_epoch
 from reportengine import collect
 from validphys.pdfgrids import XPlottingGrid
 
-from ntkpdf.utils import plotting_grid_from_ntkstat, EVOL_LIST
+from ntkpdf.utils import plotting_grid_from_ntkstat, peak_rss_gb, EVOL_LIST
 
 log = logging.getLogger(__name__)
 
@@ -303,6 +303,89 @@ def compute_ntk_decomposition_ensemble(
     )
 
 
+@dataclass
+class FeatureColumns:
+    """Memory-light container for just the feature columns ``q`` at one epoch.
+
+    The feature *plots* only ever use ``q`` (and the per-replica ``cuts`` for the
+    padding mask); they never touch ``qinv`` / ``P_parallel`` / ``P_perp`` (those
+    drive the evolution operator's ``u``/``v`` in the analytical-solution path). So
+    the report builds this instead of the full :class:`EvolutionOperator`, holding
+    *one* ``(nreplicas, n, n)`` array per (epoch, name) rather than four -- ~4x less
+    retained memory. That matters because reportengine never frees, and the report
+    keeps one of these alive per snapshot epoch x model config.
+    """
+
+    q: NTKStats          # (nreplicas, n, n); column k-1 is feature/rank k
+    cuts: np.ndarray     # (nreplicas,) per-replica perp-mode count
+    flavours: list = field(default_factory=lambda: list(EVOL_LIST))
+    xgrid: np.ndarray = field(default_factory=lambda: np.asarray(XGRID))
+
+
+def _q_columns_by_replica(eigenvalues, eigenvectors, M, tol):
+    """The padded ``q`` columns for one replica -- the ``Q`` part of
+    :func:`compute_ntk_decomposition_by_replica_at_epoch`, computed in **numpy**
+    (positional, no pandas label alignment) and skipping ``Qinv`` / ``P_parallel`` /
+    ``P_perp``. Returns ``(cut, Q)`` with ``Q`` padded to ``(n, n)`` (zeros beyond the
+    cut), so it is positionally identical to the full path's ``q``."""
+    eigenvalues = np.asarray(eigenvalues)
+    if eigenvalues[0] <= 0:
+        raise ValueError("Largest NTK eigenvalue is non-positive.")
+    cut = int(np.sum(eigenvalues / eigenvalues[0] > tol))
+    if cut == 0:
+        raise ValueError(f"All eigenvalues are below tolerance {tol}.")
+
+    evecs = np.asarray(eigenvectors)               # (n, n)
+    n = evecs.shape[1]
+    Z_perp = evecs[:, :cut]                         # (n, cut)
+    Ls = np.sqrt(eigenvalues[:cut])
+    ZtMZ = Z_perp.T @ np.asarray(M) @ Z_perp        # (cut, cut), positional matmul
+    H_perp = (Ls[:, None] * ZtMZ) * Ls[None, :]
+    _, W = np.linalg.eigh(H_perp)                   # ascending
+    W = W[:, ::-1]                                  # -> descending (matches full path)
+    Q = (Z_perp * Ls[None, :]) @ W                  # (n, cut)
+    Qpad = np.zeros((n, n), dtype=Q.dtype)
+    Qpad[:, :cut] = Q
+    return cut, Qpad
+
+
+def feature_columns_at_epoch(
+    eigenvalues_at_epoch: NTKStats,
+    eigenvectors_at_epoch: NTKStats,
+    m_matrix_train_val,
+    tol: float = 1e-7,
+    training: bool = True,
+) -> FeatureColumns:
+    """Compute only the feature columns ``q`` (+ per-replica cuts) at one epoch.
+
+    A memory-light alternative to ``compute_ntk_decomposition_ensemble`` for the
+    feature *plots*: produces the same ``q`` as the full ``EvolutionOperator``
+    (verified positionally identical) without building/retaining
+    ``qinv``/``P_parallel``/``P_perp``. Mirrors the full path's metric handling
+    (``M = m_matrix_train_val[0]``; per-replica ``M`` if it is an ``NTKStats``).
+    """
+    log.info("[features] computing q columns (%d replicas) | peak RSS %.1f GB",
+             eigenvalues_at_epoch.nreplica, peak_rss_gb())
+    M = m_matrix_train_val[0]
+    if isinstance(M, NTKStats):
+        per_replica = [
+            _q_columns_by_replica(evals_r, evecs_r, M_r, tol)
+            for evals_r, evecs_r, M_r in zip(
+                eigenvalues_at_epoch.data, eigenvectors_at_epoch.frames, M.frames
+            )
+        ]
+    else:
+        per_replica = [
+            _q_columns_by_replica(evals_r, evecs_r, M, tol)
+            for evals_r, evecs_r in zip(
+                eigenvalues_at_epoch.data, eigenvectors_at_epoch.frames
+            )
+        ]
+    cuts = np.array([c for c, _ in per_replica])
+    q = NTKStats(np.stack([Q for _, Q in per_replica]))
+    return FeatureColumns(q=q, cuts=cuts)
+
+
 def evolution_operator(compute_ntk_decomposition_ensemble) -> EvolutionOperator:
     """The NTK :class:`EvolutionOperator` linearised at a reference epoch -- a
     friendly named alias for ``compute_ntk_decomposition_ensemble``.
@@ -333,7 +416,7 @@ def _feature_grid_from_columns(col, flavours, xgrid, basis):
 
 
 def feature_grids_at_epoch(
-    compute_ntk_decomposition_ensemble,
+    feature_columns_at_epoch,
     rank_indices: list,
     replica_index: Optional[int] = None,
     basis: str = "evolution",
@@ -368,11 +451,11 @@ def feature_grids_at_epoch(
       the rank exceeds its cut the column is zero; we log a warning rather than
       silently drawing a flat zero.
     """
-    evo = compute_ntk_decomposition_ensemble
-    q = evo.q.data                       # (nreplicas, n, n)
-    cuts = np.asarray(evo.cuts)          # (nreplicas,) per-replica perp-mode count
-    flavours = list(evo.flavours)
-    xgrid = np.asarray(evo.xgrid)
+    fc = feature_columns_at_epoch
+    q = fc.q.data                        # (nreplicas, n, n)
+    cuts = np.asarray(fc.cuts)           # (nreplicas,) per-replica perp-mode count
+    flavours = list(fc.flavours)
+    xgrid = np.asarray(fc.xgrid)
     n_ranks = q.shape[2]
 
     grids = []
@@ -493,8 +576,16 @@ def h_val_grid(
     M = m_matrix_train_val[0 if training else 1]
     M_frames = [np.asarray(frame) for frame in M.frames]
 
+    epochs = list(epochs)
+    n_ep = len(epochs)
+    log.info("[h-grid] building for '%s' (training=%s): streaming eigenvectors over "
+             "%d epochs | peak RSS %.1f GB", fit.label, training, n_ep, peak_rss_gb())
+
     h_stats = {}
-    for epoch in epochs:
+    for i, epoch in enumerate(epochs):
+        if i % 25 == 0 or i == n_ep - 1:
+            log.info("[h-grid] epoch %d/%d (epoch=%s) | peak RSS %.1f GB",
+                     i + 1, n_ep, epoch, peak_rss_gb())
         eigenvalues = eigenvalue_grid.get_stat_by_epoch(epoch).data        # (nrep, n)
         # Heavy: recomputes the NTK + eigendecomposition for every replica at this
         # epoch. Kept as a local so it is freed before the next epoch (see above).
@@ -512,7 +603,7 @@ def h_val_grid(
                 for r in range(eigenvectors.shape[0])
             ])
         )
-        del eigenvectors  # release this epoch's eigenvectors before the next one
+        del eigenvectors  # drop this epoch's (nrep, n, n) eigenvectors before the next
 
     return hValGrid(label=fit.label, epochs=list(epochs), eigenvalues_stats=h_stats)
 

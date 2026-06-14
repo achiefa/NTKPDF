@@ -4,11 +4,20 @@ ntk.utils.py
 Collection of utilities for the ntk app.
 """
 
+import resource
+import sys
 from functools import lru_cache
 from typing import List, Optional, Union
 
 import numpy as np
 import pandas as pd
+
+
+def peak_rss_gb():
+    """Peak resident memory (GB) of this process so far, for progress logging.
+    ``ru_maxrss`` is bytes on macOS and kilobytes on Linux."""
+    m = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return m / 1e9 if sys.platform == "darwin" else m / 1e6
 
 from colibri.api import API as ColibriAPI
 from colibri.constants import EXPORT_LABELS, flavour_to_evolution, XGRID
