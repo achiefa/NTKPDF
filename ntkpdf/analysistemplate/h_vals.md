@@ -2,15 +2,30 @@
 
 # Feature eigenvalues
 
-The h grid is built **once** per (fit, model config); the x-scales, rank groups and
-replicas are iterated inside the providers (so the grid is not rebuilt per figure).
-Each figure is titled by its x-scale, rank group (and replica). The single-replica
-plots are empty unless `--replicas` was given.
+The `h_val_grid` is built **once** per (fit, model config) and *sliced* by the rank
+groups / x-scales below -- the template with/endwith loops drive only the section
+structure and the rank selection, they do not rebuild the (full-trajectory) grid. The
+single-replica plots are empty unless `--replicas` was given.
 
 ## Ensemble
 
-{@plot_feature_eigvals_grouped@}
+{@with PDFscalespecs@}
+### {@Xscaletitle@} x-scale
+{@with Rankspecs@}
+#### {@rank_title@}
+{@plot_feature_eigvals_rank@}
+{@endwith@}
+{@endwith@}
 
 ## Single replicas
 
-{@plot_feature_eigvals_replicas_grouped@}
+{@with Replicaspecs@}
+### Replica {@replica_index@}
+{@with PDFscalespecs@}
+#### {@Xscaletitle@} x-scale
+{@with Rankspecs@}
+##### {@rank_title@}
+{@plot_feature_eigvals_replica_rank@}
+{@endwith@}
+{@endwith@}
+{@endwith@}

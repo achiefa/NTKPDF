@@ -2,15 +2,24 @@
 
 # NTK eigenvalues
 
-The eigenvalue grid is built **once** per (fit, model config); the rank groups and
-replicas are iterated inside the providers (so the grid is not rebuilt per figure).
-Each figure is titled by its rank group (and replica). The single-replica plots are
-empty unless `--replicas` was given.
+The `eigenvalue_grid` is built **once** per (fit, model config) and *sliced* by the
+rank groups below -- the template with/endwith loops drive only the section structure
+and the rank selection, they do not rebuild the (full-trajectory) grid. The
+single-replica plots are empty unless `--replicas` was given.
 
 ## Ensemble
 
-{@plot_eigvals_grouped@}
+{@with Rankspecs@}
+### {@rank_title@}
+{@plot_eigvals_rank@}
+{@endwith@}
 
 ## Single replicas
 
-{@plot_eigvals_replicas_grouped@}
+{@with Replicaspecs@}
+### Replica {@replica_index@}
+{@with Rankspecs@}
+#### {@rank_title@}
+{@plot_eigvals_replica_rank@}
+{@endwith@}
+{@endwith@}
