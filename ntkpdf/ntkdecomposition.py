@@ -4,6 +4,7 @@ ntkpdf.ntkdecomposition.py
 Module for the decomposition of the PDFs into their NTK components.
 """
 from dataclasses import dataclass, field
+from itertools import repeat
 import logging
 from typing import Optional
 
@@ -21,6 +22,64 @@ from ntkpdf.utils import plotting_grid_from_ntkstat, peak_rss_gb, EVOL_LIST
 
 log = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Shared per-replica decomposition utilities
+#
+# Every per-replica path -- the full pandas decomposition, the numpy ``q``-only
+# path, and the numpy ``h``-only path -- starts from the same three steps: pick the
+# perp cut, form ``Z_perp`` and ``√Λ``, build ``H_perp = √Λ (Zᵀ M Z) √Λ``. These
+# helpers centralise that so the cut rule and the H_perp formula live in one place.
+# ---------------------------------------------------------------------------
+def _perp_cut(eigenvalues, tol: float) -> int:
+    """Number of NTK eigenmodes kept (the "perp" subspace): those with
+    ``λ_i / λ_0 > tol``. Shared validation + cut rule for every per-replica path."""
+    eigenvalues = np.asarray(eigenvalues)
+    if eigenvalues[0] <= 0:
+        raise ValueError("Largest NTK eigenvalue is non-positive.")
+    cut = int(np.sum(eigenvalues / eigenvalues[0] > tol))
+    if cut == 0:
+        raise ValueError(f"All eigenvalues are below tolerance {tol}.")
+    return cut
+
+
+def _h_perp_matrix(eigenvalues, eigenvectors, M, tol: float):
+    """The per-replica ``H_perp = √Λ (Zᵀ M Z) √Λ`` plus the pieces its
+    eigendecomposition needs: ``(cut, Z_perp (n, cut), √Λ (cut,), H_perp (cut, cut),
+    n)``.
+
+    Numpy/positional (``np.asarray``) **on purpose**: colibri eigenvectors are
+    labelled with ``FK_FLAVOURS`` while ``M`` uses ``EVOL_LIST`` -- positionally
+    identical but different strings, so a pandas label-aligned ``@`` would raise
+    *"matrices are not aligned"*. (See the CLAUDE.md note on the Z-vs-M mismatch.)
+    The full pandas path keeps its own label-aware matmul instead.
+    """
+    eigenvalues = np.asarray(eigenvalues)
+    cut = _perp_cut(eigenvalues, tol)
+    evecs = np.asarray(eigenvectors)                # (n, n)
+    Z_perp = evecs[:, :cut]                          # (n, cut)
+    Ls = np.sqrt(eigenvalues[:cut])
+    ZtMZ = Z_perp.T @ np.asarray(M) @ Z_perp         # (cut, cut), positional matmul
+    H_perp = (Ls[:, None] * ZtMZ) * Ls[None, :]
+    return cut, Z_perp, Ls, H_perp, evecs.shape[1]
+
+
+def _per_replica(fn, eigenvalues_at_epoch, eigenvectors_at_epoch, M, tol):
+    """Apply ``fn(evals_r, evecs_r, M_r, tol)`` for each replica, broadcasting the
+    metric: a single shared ``M`` is reused for every replica, an ``NTKStats`` ``M``
+    is sliced per replica (``M.frames``). Shared by both ensemble builders."""
+    Ms = M.frames if isinstance(M, NTKStats) else repeat(M)
+    return [
+        fn(evals_r, evecs_r, M_r, tol)
+        for evals_r, evecs_r, M_r in zip(
+            eigenvalues_at_epoch.data, eigenvectors_at_epoch.frames, Ms
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# NTK decomposition and evolution operator classes
+# ---------------------------------------------------------------------------
 @dataclass
 class NTKDecomposition:
     """
@@ -181,12 +240,7 @@ def compute_ntk_decomposition_by_replica_at_epoch(
     -------
     NTKDecomposition
     """
-    if eigenvalues[0] <= 0:
-        raise ValueError("Largest NTK eigenvalue is non-positive.")
-
-    cut = int(np.sum(eigenvalues / eigenvalues[0] > tol))
-    if cut == 0:
-        raise ValueError(f"All eigenvalues are below tolerance {tol}.")
+    cut = _perp_cut(eigenvalues, tol)
 
     n_eig = eigenvectors.shape[1]
     n_columns = cut
@@ -200,9 +254,7 @@ def compute_ntk_decomposition_by_replica_at_epoch(
 
     Lambda_sqrt = np.sqrt(eigenvalues[:cut])
     Lambda_sqrt_inv = 1.0 / Lambda_sqrt
-    
-    ZtMZ = Z_perp.T @ M @ Z_perp
-    H_perp = Lambda_sqrt[:, None] * ZtMZ * Lambda_sqrt[None, :]
+    _, _, _, H_perp, _ = _h_perp_matrix(eigenvalues, eigenvectors, M, tol)
 
     h, W = np.linalg.eigh(H_perp)
     idx = np.argsort(h)[::-1]
@@ -238,6 +290,7 @@ def compute_ntk_decomposition_by_replica_at_epoch(
         Z_par=Z_par,
         W=W
     )
+
 
 def compute_ntk_decomposition_ensemble(
     eigenvalues_at_epoch: NTKStats,
@@ -279,16 +332,10 @@ def compute_ntk_decomposition_ensemble(
     Cinv = cinv_diagonal_basis_train_val[idx_tr_val]
     FK = fk_diagonal_basis_train_val[idx_tr_val]
 
-    if isinstance(M, NTKStats):
-      per_replica = [
-          compute_ntk_decomposition_by_replica_at_epoch(evals_r, evecs_r, M_r, tol=tol)
-          for evals_r, evecs_r, M_r in zip(eigenvalues_at_epoch.data, eigenvectors_at_epoch.frames, M.frames)
-      ]
-    else:
-      per_replica = [
-          compute_ntk_decomposition_by_replica_at_epoch(evals_r, evecs_r, M, tol=tol)
-          for evals_r, evecs_r in zip(eigenvalues_at_epoch.data, eigenvectors_at_epoch.frames)
-      ]
+    per_replica = _per_replica(
+        compute_ntk_decomposition_by_replica_at_epoch,
+        eigenvalues_at_epoch, eigenvectors_at_epoch, M, tol,
+    )
 
     return EvolutionOperator(
         cuts=np.array([d.cut for d in per_replica]),
@@ -303,6 +350,19 @@ def compute_ntk_decomposition_ensemble(
     )
 
 
+def evolution_operator(compute_ntk_decomposition_ensemble) -> EvolutionOperator:
+    """A friendly named alias for ``compute_ntk_decomposition_ensemble``."""
+    return compute_ntk_decomposition_ensemble
+
+
+# ---------------------------------------------------------------------------
+# Feature columns and grids for plotting
+#
+# Resources are generated and consumed within the functions' scope, so they are freed
+# after each call. Therefore, the reportengine nodes that call these functions do not
+# retain the large arrays in memory, and the report can be built without running out of RAM.
+# This is crucial because reportengine never frees node results.
+# ---------------------------------------------------------------------------
 @dataclass
 class FeatureColumns:
     """Memory-light container for just the feature columns ``q`` at one epoch.
@@ -328,19 +388,7 @@ def _q_columns_by_replica(eigenvalues, eigenvectors, M, tol):
     (positional, no pandas label alignment) and skipping ``Qinv`` / ``P_parallel`` /
     ``P_perp``. Returns ``(cut, Q)`` with ``Q`` padded to ``(n, n)`` (zeros beyond the
     cut), so it is positionally identical to the full path's ``q``."""
-    eigenvalues = np.asarray(eigenvalues)
-    if eigenvalues[0] <= 0:
-        raise ValueError("Largest NTK eigenvalue is non-positive.")
-    cut = int(np.sum(eigenvalues / eigenvalues[0] > tol))
-    if cut == 0:
-        raise ValueError(f"All eigenvalues are below tolerance {tol}.")
-
-    evecs = np.asarray(eigenvectors)               # (n, n)
-    n = evecs.shape[1]
-    Z_perp = evecs[:, :cut]                         # (n, cut)
-    Ls = np.sqrt(eigenvalues[:cut])
-    ZtMZ = Z_perp.T @ np.asarray(M) @ Z_perp        # (cut, cut), positional matmul
-    H_perp = (Ls[:, None] * ZtMZ) * Ls[None, :]
+    cut, Z_perp, Ls, H_perp, n = _h_perp_matrix(eigenvalues, eigenvectors, M, tol)
     _, W = np.linalg.eigh(H_perp)                   # ascending
     W = W[:, ::-1]                                  # -> descending (matches full path)
     Q = (Z_perp * Ls[None, :]) @ W                  # (n, cut)
@@ -364,46 +412,15 @@ def feature_columns_at_epoch(
     ``qinv``/``P_parallel``/``P_perp``. Mirrors the full path's metric handling
     (``M = m_matrix_train_val[0]``; per-replica ``M`` if it is an ``NTKStats``).
     """
-    log.info("[features] computing q columns (%d replicas) | peak RSS %.1f GB",
+    log.debug("[features] computing q columns (%d replicas) | peak RSS %.1f GB",
              eigenvalues_at_epoch.nreplica, peak_rss_gb())
-    M = m_matrix_train_val[0]
-    if isinstance(M, NTKStats):
-        per_replica = [
-            _q_columns_by_replica(evals_r, evecs_r, M_r, tol)
-            for evals_r, evecs_r, M_r in zip(
-                eigenvalues_at_epoch.data, eigenvectors_at_epoch.frames, M.frames
-            )
-        ]
-    else:
-        per_replica = [
-            _q_columns_by_replica(evals_r, evecs_r, M, tol)
-            for evals_r, evecs_r in zip(
-                eigenvalues_at_epoch.data, eigenvectors_at_epoch.frames
-            )
-        ]
+    M = m_matrix_train_val[0 if training else 1]
+    per_replica = _per_replica(
+        _q_columns_by_replica, eigenvalues_at_epoch, eigenvectors_at_epoch, M, tol
+    )
     cuts = np.array([c for c, _ in per_replica])
-    q = NTKStats(np.stack([Q for _, Q in per_replica]))
+    q = NTKStats(np.stack([Q for _, Q in per_replica])) # Padded
     return FeatureColumns(q=q, cuts=cuts)
-
-
-def evolution_operator(compute_ntk_decomposition_ensemble) -> EvolutionOperator:
-    """The NTK :class:`EvolutionOperator` linearised at a reference epoch -- a
-    friendly named alias for ``compute_ntk_decomposition_ensemble``.
-
-    The **reference time** is the epoch at which the NTK is evaluated; it flows in
-    through ``eigenvalues_at_epoch`` / ``eigenvectors_at_epoch`` (both keyed on
-    ``epoch``). The returned operator is time-independent -- the *evolution* time
-    ``t`` is supplied to its methods (``__call__`` / ``u`` / ``v`` /
-    ``plotting_grid*``), e.g. ``t = epoch * learning_rate`` to evolve up to the
-    reference time.
-
-    This is a regular **provider**, not a ``produce_`` rule. It is built from other
-    *providers* (``eigenvalues_at_epoch`` / ``eigenvectors_at_epoch`` and the
-    FK/Cinv/M chain), and a ``produce_`` rule can only depend on config inputs and
-    other ``produce_`` productions -- never on the provider DAG -- so a production
-    here raises ``InputNotFoundError: A parameter is required: eigenvalues_at_epoch``.
-    """
-    return compute_ntk_decomposition_ensemble
 
 
 def _feature_grid_from_columns(col, flavours, xgrid, basis):
@@ -530,21 +547,9 @@ def _h_perp_eigenvalues(eigenvalues, eigenvectors, M, tol):
     ``eigh``), and avoids pandas label alignment. ``hValGrid`` only needs ``h``, so
     building the whole EvolutionOperator would be the bottleneck.
     """
-    eigenvalues = np.asarray(eigenvalues)
-    if eigenvalues[0] <= 0:
-        raise ValueError("Largest NTK eigenvalue is non-positive.")
-    cut = int(np.sum(eigenvalues / eigenvalues[0] > tol))
-    if cut == 0:
-        raise ValueError(f"All eigenvalues are below tolerance {tol}.")
-
-    evecs = np.asarray(eigenvectors)
-    Z_perp = evecs[:, :cut]                       # (n, cut)
-    Ls = np.sqrt(eigenvalues[:cut])
-    ZtMZ = Z_perp.T @ np.asarray(M) @ Z_perp      # (cut, cut), positional matmul
-    H_perp = (Ls[:, None] * ZtMZ) * Ls[None, :]
-
+    cut, _, _, H_perp, n = _h_perp_matrix(eigenvalues, eigenvectors, M, tol)
     h = np.linalg.eigvalsh(H_perp)[::-1]          # descending, eigenvalues only
-    return np.pad(h, (0, evecs.shape[1] - cut))
+    return np.pad(h, (0, n - cut))
 
 
 def h_val_grid(
@@ -584,13 +589,13 @@ def h_val_grid(
 
     epochs = list(epochs)
     n_ep = len(epochs)
-    log.info("[h-grid] building for '%s' (training=%s): streaming eigenvectors over "
+    log.debug("[h-grid] building for '%s' (training=%s): streaming eigenvectors over "
              "%d epochs | peak RSS %.1f GB", fit.label, training, n_ep, peak_rss_gb())
 
     h_stats = {}
     for i, epoch in enumerate(epochs):
         if i % 25 == 0 or i == n_ep - 1:
-            log.info("[h-grid] epoch %d/%d (epoch=%s) | peak RSS %.1f GB",
+            log.debug("[h-grid] epoch %d/%d (epoch=%s) | peak RSS %.1f GB",
                      i + 1, n_ep, epoch, peak_rss_gb())
         eigenvalues = eigenvalue_grid.get_stat_by_epoch(epoch).data        # (nrep, n)
         # Heavy: recomputes the NTK + eigendecomposition for every replica at this

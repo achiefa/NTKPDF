@@ -55,8 +55,4 @@ Feature eigenmodes
 [Plots H ({@title_eigenvalues@})]({@h_val_report report@})
 {@endwith@}
 
-Features
---------
-{@with Eigenvaluesconfigs@}
-[Features q ({@title_eigenvalues@})]({@feature_report report@})
-{@endwith@}
+
