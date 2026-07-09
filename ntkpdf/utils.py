@@ -115,69 +115,6 @@ class BestEpochStat(MCStats):
     def central_value(self):
         return np.mean(self.data, axis=0)
 
-def produce_plotting_grid(
-    fitname,
-    epochs,
-    xgrid,
-    flavours: Optional[Union[list, tuple]] = None,
-    vetoname: Optional[str] = None,
-    nrep: Optional[int] = None,
-    StatClass: type = MCStats,
-) -> tuple[Basis, XPlottingGrid]:
-    """Produce the plotting grid for the specified fit and epochs, specifying
-    flavours, vetoes and number of replicas to use."""
-    fitinfo = API.fit(fit=fitname).as_input()
-    theoryID = API.theoryid(**fitinfo['theory'])
-    basis = fitinfo['fitting']['fitbasis']
-    q0 = theoryID.get_description().get("Q0")
-    pdf_models, vetoes = get_pdf_model_at_epochs(fitname, epochs, vetoname=vetoname)
-
-    input_xgrid = xgrid.reshape(1,-1,1)
-    out = pdf_models.predict({"pdf_input": input_xgrid.T}, verbose=False).squeeze()[vetoes]
-    if nrep is None:
-        nrep = out.shape[0]
-    
-    print(f"Using {nrep} replicas for plotting grid.")
-    if flavours is None:
-        flavours = list(FKFLAV_TO_IDX.keys())
-    nn_outputs = out[:nrep,:,[FKFLAV_TO_IDX[fl] for fl in flavours]]
-    nn_outputs = nn_outputs.transpose((0,2,1)) # Shape (nrep, nflavour, ngrid)
-
-    # Add central value to the output
-    gv = np.concatenate([np.mean(nn_outputs, axis=0, keepdims=True), nn_outputs], axis=0)
-
-    # Make usable outside reportengine
-    checked = check_basis(basis, flavours)
-    basis = checked['basis']
-    flavours = checked['flavours']
-    # Eliminante Q axis
-    stats_gv = StatClass(gv)
-
-    res = XPlottingGrid(q0, basis, flavours, xgrid, stats_gv, "log")
-    return (basis, res)
-
-# def plotting_grid_from_model(
-#     fitname,
-#     epochs,
-#     xgrid,
-#     basis,
-#     flavours,
-#     vetoname: str = None,
-#     replica_index_list: tuple = None
-# ):
-#     """Construct a plotting grid directly from the PDF model, using
-#     the vp-interface."""
-#     fitinfo = API.fit(fit=fitname).as_input()
-#     theoryID = API.theoryid(**fitinfo['theory'])
-#     q0 = theoryID.get_description().get("Q0")
-#     pdf_models, vetoes = get_pdf_model_at_epochs(fitname, epochs, vetoname=vetoname)
-#     selected_replicas = np.asarray(pdf_models.split_replicas())[vetoes]
-#     if replica_index_list is not None:
-#         selected_replicas = selected_replicas[replica_index_list]
-#     n3pdf = N3PDF(selected_replicas)
-#     x_grid = xplotting_grid(n3pdf, q0, xgrid, basis, flavours)
-#     return x_grid
-
 def plotting_grid_from_ntkstat(
     stats: NTKStats,
     xgrid: np.ndarray,
