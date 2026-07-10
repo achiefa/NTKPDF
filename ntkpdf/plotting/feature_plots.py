@@ -188,8 +188,8 @@ def plot_feature_eigvals_rank(
     legend_outside: bool = False,
 ):
     """Ensemble feature eigenvalues h^(k) vs epoch for one rank group (one figure).
-
-    Takes the single ``h_val_grid`` (fit-anchored, built once) so the template can drive
+   
+    Takes the single ``h_val_grid`` (fit-anchored, built once) so the template can drive 
     the rank/scale faceting and section headings while the grid is sliced, not rebuilt.
     """
     yield from ntk_plot_provider(
@@ -286,6 +286,58 @@ def plot_eigvals_replica_rank(
         title_fn=lambda grid: rf"{grid.label} ($\rm replica\ {replica_index}$)",
         name_fn=lambda grid: f"eigvals_replica_{replica_index}_{grid.label}",
         ylabel_fn=lambda _: _LAMBDA_YLABEL,
+        yscale=yscale,
+        ymin=ymin,
+        ymax=ymax,
+        legend_outside=legend_outside,
+    )
+
+
+@_figuregen
+def plot_frobenius_norm(
+    frobenius_norm_grid,
+    error_type: str = "mean",
+    yscale: Optional[str] = None,
+    ymin: Optional[float] = None,
+    ymax: Optional[float] = None,
+    legend_outside: bool = False,
+):
+    """Ensemble NTK Frobenius norm ||K||_F vs epoch (one figure). The norm is a single
+    series, so the lone grid column is selected with ``rank_indices=[1]``."""
+    yield from ntk_plot_provider(
+        [frobenius_norm_grid],
+        [1],
+        draw_fn=partial(draw_band, error_type=error_type),
+        iterator_fn=iter_by_fit,
+        title_fn=lambda grid: grid.label,
+        name_fn=lambda grid: f"frobenius_{grid.label}",
+        ylabel_fn=lambda _: _FROBENIUS_YLABEL,
+        yscale=yscale,
+        ymin=ymin,
+        ymax=ymax,
+        legend_outside=legend_outside,
+    )
+
+
+@_figuregen
+def plot_frobenius_norm_replica(
+    frobenius_norm_grid,
+    replica_index: int,
+    yscale: Optional[str] = None,
+    ymin: Optional[float] = None,
+    ymax: Optional[float] = None,
+    legend_outside: bool = False,
+):
+    """Single-replica NTK Frobenius norm ||K||_F vs epoch (one figure)."""
+    yield from ntk_plot_provider(
+        [frobenius_norm_grid],
+        [1],
+        draw_fn=partial(_draw_one_replica, replica_index=replica_index),
+        iterator_fn=iter_by_fit,
+        custom_handler=None,
+        title_fn=lambda grid: rf"{grid.label} ($\rm replica\ {replica_index}$)",
+        name_fn=lambda grid: f"frobenius_replica_{replica_index}_{grid.label}",
+        ylabel_fn=lambda _: _FROBENIUS_YLABEL,
         yscale=yscale,
         ymin=ymin,
         ymax=ymax,

@@ -357,7 +357,7 @@ def evolution_operator(compute_ntk_decomposition_ensemble) -> EvolutionOperator:
 
 # ---------------------------------------------------------------------------
 # Feature columns and grids for plotting
-#
+# 
 # Resources are generated and consumed within the functions' scope, so they are freed
 # after each call. Therefore, the reportengine nodes that call these functions do not
 # retain the large arrays in memory, and the report can be built without running out of RAM.
@@ -622,3 +622,38 @@ def h_val_grid(
 # Collect h_val grids across fits (mirrors colibri's `eigval_grids_by_fit`), so the
 # same colibri plot providers can be called with these grids.
 h_val_grids_by_fit = collect("h_val_grid", ("fits",))
+
+
+# ---------------------------------------------------------------------------
+# Frobenius norm of the NTK (from the eigenvalues), mirroring EigenvalueGrid
+# ---------------------------------------------------------------------------
+class frobeniusNormGrid(EigenvalueGrid):
+    """The NTK Frobenius norm ``||K||_F`` as a function of epoch.
+
+    A single scalar per replica per epoch, stored as the lone column of an
+    ``EigenvalueGrid`` (per-epoch ``NTKStats`` of shape ``(nreplicas, 1)``) so colibri's
+    NTK plot providers work on it unchanged -- plotted with ``rank_indices=[1]``.
+    """
+
+    def get_plotting_label(self, rank_index: int, **kwargs) -> str:
+        return r"$\|K\|_F$"
+
+
+def frobenius_norm_grid(fit, eigenvalue_grid, epochs) -> frobeniusNormGrid:
+    """Build the :class:`frobeniusNormGrid` from the (cheap, disk-cached)
+    ``eigenvalue_grid``.
+
+    The NTK is symmetric PSD, so its eigenvalues are its singular values and the
+    Frobenius norm is ``||K||_F = sqrt(sum_i lambda_i^2)`` -- computed directly from the
+    eigenvalues per replica, no eigenvectors and no NTK recomputation.
+    """
+    norm_stats = {}
+    for epoch in epochs:
+        eigenvalues = eigenvalue_grid.get_stat_by_epoch(epoch).data            # (nrep, n)
+        norms = np.sqrt((eigenvalues ** 2).sum(axis=1))[:, None]               # (nrep, 1)
+        norm_stats[epoch] = NTKStats(norms)
+    return frobeniusNormGrid(label=fit.label, epochs=list(epochs), eigenvalues_stats=norm_stats)
+
+
+# Collect across fits (mirrors `h_val_grids_by_fit` / colibri's `eigval_grids_by_fit`).
+frobenius_norm_grids_by_fit = collect("frobenius_norm_grid", ("fits",))
