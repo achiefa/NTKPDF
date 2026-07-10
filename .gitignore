@@ -20,3 +20,5 @@ __pycache__/
 
 # MacOS specific files
 .DS_Store
+results_*
+*.key
