@@ -2,27 +2,30 @@
 
 # Feature eigenvalues
 
+The `h_val_grid` is built **once** per (fit, model config) and *sliced* by the rank
+groups / x-scales below -- the template with/endwith loops drive only the section
+structure and the rank selection, they do not rebuild the (full-trajectory) grid. The
+single-replica plots are empty unless `--replicas` was given.
+
 ## Ensemble
 
 {@with PDFscalespecs@}
-### {@Xscaletitle@}
+### {@Xscaletitle@} x-scale
 {@with Rankspecs@}
 #### {@rank_title@}
-{@plot_feature_eigvals_by_fit@}
+{@plot_feature_eigvals_rank@}
 {@endwith@}
 {@endwith@}
 
-# Single replicas
-
-One figure per selected replica (`--replicas`); empty if none were selected.
+## Single replicas
 
 {@with Replicaspecs@}
-## Replica {@replica_index@}
+### Replica {@replica_index@}
 {@with PDFscalespecs@}
-### {@Xscaletitle@}
+#### {@Xscaletitle@} x-scale
 {@with Rankspecs@}
-#### {@rank_title@}
-{@plot_feature_eigvals_replica_by_fit@}
+##### {@rank_title@}
+{@plot_feature_eigvals_replica_rank@}
 {@endwith@}
 {@endwith@}
 {@endwith@}

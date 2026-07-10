@@ -472,3 +472,64 @@ class ntkConfig(colibriConfig):
 
         fakepdf = self.produce_fakepdf(fit)
         return xplotting_grid(fakepdf, 1.65, XGRID, "evolution", EVOL_LIST)
+
+    def produce_fitting_covmat_eigensystem(self, fit, fitting_covmat_name):
+        """Eigendecomposition of the fitting covariance matrix, loaded **once**.
+
+        This is a *production* (not a plain provider) on purpose: the eigenvector
+        matrix is ``(Ndata, Ndata)`` -- hundreds of MB -- and a genuine per-fit
+        constant, but the consumers (`fk_diagonal_basis_train_val` etc.) are resolved
+        inside the report's nested ``{@with ...@}`` loops. As a provider it was
+        recomputed *and retained* once per presentation leaf (the from_: theory/dataset
+        taint, see CLAUDE.md), growing memory by ~0.6 GB/leaf -> OOM. As a production it
+        is evaluated once at graph-build and shared by every leaf.
+
+        The columns are deliberately left as read from disk: aligning them to the FK
+        index needs the ``ntk_fast_kernel_arrays`` provider (unavailable to a
+        production), so that cheap, idempotent relabelling is done by the single
+        consumer ``fk_diagonal_basis_train_val``.
+
+        Only valid for fits run with ``diagonal_basis=True``.
+        """
+        if not fit.as_input().get("diagonal_basis", True):
+            raise ConfigError(
+                f"Fit {fit.name} was not run with diagonal_basis=True; "
+                "fitting_covmat_eigensystem expects a diagonal-basis fit."
+            )
+        import pandas as pd
+
+        eigensystem = pd.read_csv(
+            fitting_covmat_name, index_col=[0], header=[0], sep="\t|,", engine="python",
+        )
+        eigvals = eigensystem.iloc[:, 0].values
+        eigvecs = eigensystem.iloc[:, 1:]
+        return eigvals, eigvecs
+
+    def produce_ntk_fast_kernel_arrays(self, fit, padding=True, flavour_basis=False):
+        """FK tables for the fit's data, built **once** as a production, anchored to ``fit``.
+
+        A production (not a provider) for the same reason as
+        ``fitting_covmat_eigensystem``: the FK is a per-fit constant, and as a provider
+        it resolved to a separate node per presentation leaf (~200x) -> reloaded +
+        retained -> OOM.
+
+        The subtlety: it must depend on ``fit`` (a *direct value*, anchored to the few
+        fit-contexts where ``fit`` is defined), **not** on the global ``data``
+        (``produce_data``, a *production* that floats to every request site). Depending
+        on the floating ``data`` kept the downstream ``fk``/``m_matrix`` pinned per-leaf
+        even though this production has 0 exec nodes. So we build the fit's ``data``
+        here, inside the fit's own data context (``fitcontextwithcuts``), which keeps the
+        whole FK -> ``fk`` -> ``m_matrix`` chain anchored to ``fit`` and collapsed to a
+        handful of nodes. The FK build itself is unchanged
+        (``data_theory._build_ntk_fast_kernel_arrays``); verify node-count + bit-identical.
+        """
+        ctx = self.produce_fitcontextwithcuts(fit, self.produce_fitinputcontext(fit))
+        with self.set_context(ns=self._curr_ns.new_child(
+            {"theoryid": ctx["theoryid"], "use_cuts": ctx["use_cuts"]}
+        )):
+            data = self.produce_data(data_input=ctx["dataset_inputs"])
+
+        # Lazy import: data_theory imports from this module (avoid a circular import).
+        from ntkpdf.data_theory import _build_ntk_fast_kernel_arrays
+
+        return _build_ntk_fast_kernel_arrays(data, padding=padding, flavour_basis=flavour_basis)

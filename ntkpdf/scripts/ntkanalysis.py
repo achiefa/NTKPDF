@@ -183,6 +183,21 @@ class CompareFitApp(App):
         # lets base_metamodels/init_grids_by_name be cached once per (fit, nreplicas).
         autosettings['fit'] = currentmap
 
+        # Inject the data/theory context as DIRECT values too (not `from_: fit`),
+        # for the same anti-taint reason as `fit` above. The whole validphys data
+        # chain -- dataset_inputs_results, loaded commondata, ntk_fast_kernel_arrays,
+        # fitting_covmat_eigensystem -- hangs off these; with `from_:` the taint pins
+        # them to the deepest namespace, so they are reloaded *and retained* inside
+        # every nested `{@with ...@}` leaf (hundreds of full commondata/FK reloads ->
+        # millions of retained YAML-parser objects -> OOM). As direct inputs the data
+        # chain resolves once. Values are exactly what `from_: fit` would yield.
+        from validphys.loader import FallbackLoader
+
+        _fit_input = FallbackLoader().check_fit(args['current_fit']).as_input()
+        autosettings['dataset_inputs'] = _fit_input['dataset_inputs']
+        autosettings['theory'] = _fit_input['theory']
+        autosettings['theoryid'] = _fit_input['theory']['theoryid']
+
         # One namespace entry per user-selected epoch; the PDF-at-epochs report
         # page iterates over these. Empty (default) -> that page renders nothing.
         autosettings['Epochspecs'] = [{'epoch': e} for e in (args.get('epochs') or [])]

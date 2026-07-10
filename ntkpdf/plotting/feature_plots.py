@@ -1,3 +1,4 @@
+import logging
 from functools import partial
 from typing import Optional
 
@@ -10,6 +11,12 @@ from colibri.ntk.plotntk import (
     iter_by_fit,
     _figuregen
 )
+
+log = logging.getLogger(__name__)
+
+_LAMBDA_YLABEL = r"$\textrm{NTK eigenvalues}$"
+_H_YLABEL = r"$\textrm{Feature eigenvalues}$"
+_FROBENIUS_YLABEL = r"$\|K\|_F$"
 
 
 def _draw_one_replica(ax, xgrid, stats, label, replica_index, handles=None, labels=None):
@@ -30,10 +37,14 @@ def _draw_one_replica(ax, xgrid, stats, label, replica_index, handles=None, labe
     ax.plot(xgrid, y, color=color, linewidth=1.5, label=label)
     return np.atleast_2d(y)
 
+
 # =============================================================================
 # Convenience functions feature eigenvalues
+#
+# This functions are not used in the reportengine templates, but are provided
+# for users who want to generate the same plots outside of the reportengine
+# context.
 # =============================================================================
-
 @_figuregen
 def plot_feature_eigvals_by_rank(
     h_val_grids_by_fit,
@@ -89,16 +100,11 @@ def plot_feature_eigvals_by_fit(
         legend_outside=legend_outside,
     )
 
-
-# =============================================================================
 # Single-replica trajectories (one figure per replica, from Replicaspecs)
-# =============================================================================
-# These reuse colibri's ``ntk_plot_provider`` + ``iter_by_fit`` but swap the band
-# draw for ``_draw_one_replica`` (colibri's ``draw_replicas`` always overlays all
+# Use``_draw_one_replica`` (colibri's ``draw_replicas`` always overlays all
 # replicas plus a mean, so it can't isolate one). They depend on the same
 # all-replica grids as the ensemble plots (cached), and pick the chosen replica's
 # row -- no per-replica recomputation.
-
 @_figuregen
 def plot_feature_eigvals_replica_by_fit(
     h_val_grids_by_fit,
@@ -157,6 +163,129 @@ def plot_eigvals_replica_by_fit(
         name_fn=lambda grid: f"eigvals_replica_{replica_index}_{grid.label}",
         ylabel_fn=lambda _: r"$\textrm{NTK eigenvalues}$",
         xscale=xscale,
+        yscale=yscale,
+        ymin=ymin,
+        ymax=ymax,
+        legend_outside=legend_outside,
+    )
+
+
+# =============================================================================
+# {@with@}-friendly leaf providers: take the SINGLE (fit-anchored) grid, not the
+# *_grids_by_fit collect. Because the grid is one shared node, putting these inside
+# {@with Rankspecs@}/{@with PDFscalespecs@} slices a grid that is built once, instead
+# of the collect rebuilding the (1000-epoch) grid per leaf. Single current fit only.
+# =============================================================================
+@_figuregen
+def plot_feature_eigvals_rank(
+    h_val_grid,
+    rank_indices: Optional[list] = None,
+    error_type: str = "mean",
+    xscale: Optional[str] = None,
+    yscale: Optional[str] = None,
+    ymin: Optional[float] = None,
+    ymax: Optional[float] = None,
+    legend_outside: bool = False,
+):
+    """Ensemble feature eigenvalues h^(k) vs epoch for one rank group (one figure).
+
+    Takes the single ``h_val_grid`` (fit-anchored, built once) so the template can drive
+    the rank/scale faceting and section headings while the grid is sliced, not rebuilt.
+    """
+    yield from ntk_plot_provider(
+        [h_val_grid],
+        rank_indices,
+        draw_fn=partial(draw_band, error_type=error_type),
+        iterator_fn=iter_by_fit,
+        title_fn=lambda grid: grid.label,
+        name_fn=lambda grid: f"h_{grid.label}",
+        ylabel_fn=lambda _: _H_YLABEL,
+        xscale=xscale,
+        yscale=yscale,
+        ymin=ymin,
+        ymax=ymax,
+        legend_outside=legend_outside,
+    )
+
+
+@_figuregen
+def plot_feature_eigvals_replica_rank(
+    h_val_grid,
+    replica_index: int,
+    rank_indices: Optional[list] = None,
+    xscale: Optional[str] = None,
+    yscale: Optional[str] = None,
+    ymin: Optional[float] = None,
+    ymax: Optional[float] = None,
+    legend_outside: bool = False,
+):
+    """Single-replica feature eigenvalues h^(k) vs epoch for one rank group (one figure).
+    ``{@with@}`` counterpart of ``plot_feature_eigvals_replicas_grouped`` (single grid)."""
+    yield from ntk_plot_provider(
+        [h_val_grid],
+        rank_indices,
+        draw_fn=partial(_draw_one_replica, replica_index=replica_index),
+        iterator_fn=iter_by_fit,
+        custom_handler=None,
+        title_fn=lambda grid: rf"{grid.label} ($\rm replica\ {replica_index}$)",
+        name_fn=lambda grid: f"h_replica_{replica_index}_{grid.label}",
+        ylabel_fn=lambda _: _H_YLABEL,
+        xscale=xscale,
+        yscale=yscale,
+        ymin=ymin,
+        ymax=ymax,
+        legend_outside=legend_outside,
+    )
+
+
+@_figuregen
+def plot_eigvals_rank(
+    eigenvalue_grid,
+    rank_indices: Optional[list] = None,
+    error_type: str = "mean",
+    yscale: Optional[str] = None,
+    ymin: Optional[float] = None,
+    ymax: Optional[float] = None,
+    legend_outside: bool = False,
+):
+    """Ensemble NTK eigenvalues lambda^(k) vs epoch for one rank group (one figure).
+    ``{@with@}`` counterpart of ``plot_eigvals_grouped`` (single ``eigenvalue_grid``)."""
+    yield from ntk_plot_provider(
+        [eigenvalue_grid],
+        rank_indices,
+        draw_fn=partial(draw_band, error_type=error_type),
+        iterator_fn=iter_by_fit,
+        title_fn=lambda grid: grid.label,
+        name_fn=lambda grid: f"eigvals_{grid.label}",
+        ylabel_fn=lambda _: _LAMBDA_YLABEL,
+        yscale=yscale,
+        ymin=ymin,
+        ymax=ymax,
+        legend_outside=legend_outside,
+    )
+
+
+@_figuregen
+def plot_eigvals_replica_rank(
+    eigenvalue_grid,
+    replica_index: int,
+    rank_indices: Optional[list] = None,
+    yscale: Optional[str] = None,
+    ymin: Optional[float] = None,
+    ymax: Optional[float] = None,
+    legend_outside: bool = False,
+):
+    """Single-replica NTK eigenvalues lambda^(k) vs epoch for one rank group (one figure).
+    ``{@with@}`` counterpart of ``plot_eigvals_replicas_grouped`` (single grid)."""
+    yield from ntk_plot_provider(
+        [eigenvalue_grid],
+        rank_indices,
+        draw_fn=partial(_draw_one_replica, replica_index=replica_index),
+        iterator_fn=iter_by_fit,
+        custom_handler=None,
+        title_fn=lambda grid: rf"{grid.label} ($\rm replica\ {replica_index}$)",
+        name_fn=lambda grid: f"eigvals_replica_{replica_index}_{grid.label}",
+        ylabel_fn=lambda _: _LAMBDA_YLABEL,
         yscale=yscale,
         ymin=ymin,
         ymax=ymax,

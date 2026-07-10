@@ -80,10 +80,10 @@ Customreplicas:
     nreplicas_title: "original number of replicas"
   - custom_nreplicas: 5
     nreplicas_title: "5 replicas"
-  # - custom_nreplicas: 100
-  #   nreplicas_title: "100 replicas"
-  # - custom_nreplicas: 200
-  #   nreplicas_title: 200 replicas
+  - custom_nreplicas: 100
+    nreplicas_title: "100 replicas"
+  - custom_nreplicas: 200
+    nreplicas_title: 200 replicas
 
 Eigenvaluesconfigs:
   - name: model
@@ -143,9 +143,9 @@ h_val_report:
     meta: Null
     template: h_vals.md
 
-feature_report:
-    meta: Null
-    template: features.md
+#feature_report:
+#    meta: Null
+#    template: features.md
 
 template: report.md
 

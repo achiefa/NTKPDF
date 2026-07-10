@@ -2,12 +2,16 @@
 This module contains plot providers for PDF plots.
 """
 
+import logging
 from copy import copy
 from typing import Optional
 
 from reportengine.figure import figuregen
 
 from ntkpdf.plotting.pdfplots_utils import plot_grids
+from ntkpdf.utils import peak_rss_gb
+
+log = logging.getLogger(__name__)
 
 # Default flavours to plot, paired with their y-axis labels so the two cannot
 # desync. Shared by all plot providers; override `flavours` in a runcard and (if
@@ -139,6 +143,8 @@ def plot_features_at_epoch(
     ``feature_grids_at_epoch``), so different ranks may average over different
     replica counts.
     """
+    log.info("[plot] features q at epoch (ensemble): %d rank(s) | peak RSS %.1f GB",
+             len(rank_indices), peak_rss_gb())
     flavours, ylabels = _resolve_flavours(flavours, ylabels)
     labels = [rf"$q^{{({k})}}$" for k in rank_indices]
 
@@ -180,6 +186,8 @@ def plot_features_at_epoch_single_replica(
     ``line`` primitive then draws one curve per rank. Like the ensemble version it
     exposes no ``yscale`` (forced linear; see :func:`plot_features_at_epoch`).
     """
+    log.info("[plot] features q at epoch (replica %s): %d rank(s) | peak RSS %.1f GB",
+             replica_index, len(rank_indices), peak_rss_gb())
     flavours, ylabels = _resolve_flavours(flavours, ylabels)
     labels = [rf"$q^{{({k})}}$" for k in rank_indices]
 
