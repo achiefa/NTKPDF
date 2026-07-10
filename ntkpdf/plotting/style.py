@@ -119,7 +119,7 @@ def make_figure(ax_width=SINGLE_FIG[0], ax_height=SINGLE_FIG[1], left=0.9, botto
 # ---------------------------------------------------------------------------
 # Legend Handler
 # ---------------------------------------------------------------------------
-HandlerSpec = namedtuple("HandlerSpec", ["color", "alpha", "ls"])
+HandlerSpec = namedtuple("HandlerSpec", ["color", "alpha", "ls", "draw_box"])
 
 class ComposedHandler:
     """Legend handler for plots with uncertainty bands."""
@@ -133,7 +133,7 @@ class ComposedHandler:
             [x0, x0 + width],
             [y0 + height / 2, y0 + height / 2],
             color=orig_handle.color,
-            linestyle=None,
+            linestyle=orig_handle.ls or "-",
             linewidth=1.5,
             transform=handlebox.get_transform(),
         )
@@ -153,7 +153,7 @@ class ComposedHandler:
           handlebox.add_artist(patch)
           ret.append(patch)
         
-        if orig_handle.ls and orig_handle.ls != "None":
+        if orig_handle.draw_box:
            box = mpatches.Rectangle(
               [x0, y0],
               width,
@@ -223,7 +223,7 @@ def draw_bounds(ax, stats, xgrid, *,
     color = line.get_color()  # resolve the actual color, even if it was None
 
     if no_bands:
-        return HandlerSpec(color, None, linestyle)
+        return HandlerSpec(color, None, linestyle, False)
 
     if show_std:
         down, up = stats.errorbarstd()  # (down, up)
@@ -232,7 +232,7 @@ def draw_bounds(ax, stats, xgrid, *,
         down68, up68 = stats.errorbar68()
         ax.plot(xgrid, up68, linestyle=band_linestyle, color=color)
         ax.plot(xgrid, down68, linestyle=band_linestyle, color=color)
-    return HandlerSpec(color, alpha, band_linestyle)
+    return HandlerSpec(color, alpha, band_linestyle, True)
 
 
 def draw_line(ax, stats, xgrid, *,
@@ -254,7 +254,7 @@ def draw_line(ax, stats, xgrid, *,
         ax.plot(xgrid, members[r-1], color=color, linestyle=linestyle,
                 linewidth=linewidth, alpha=alpha, **line_kwargs)
 
-    return HandlerSpec(color, None, linestyle)
+    return HandlerSpec(color, None, linestyle, False)
 
 
 def select_draw(provider):
