@@ -61,6 +61,7 @@ def plot_grids(grids: list[XPlottingGrid],
                separate_axis: list[int] = None,
                kwargs_twinx: dict = {},
                legend_outside: bool = False,
+               axes: list = None,
                **kwargs,
                ):
     plot_provider = select_draw(plot_provider)
@@ -73,6 +74,12 @@ def plot_grids(grids: list[XPlottingGrid],
         raise ValueError(f"Got {len(plot_args)} plot_args for {len(grids)} grids.")
     if ylabels is not None and len(ylabels) != len(flavours):
         raise ValueError(f"Got {len(ylabels)} ylabels for {len(flavours)} flavours.")
+    # When the caller supplies axes (e.g. a grid of subplots) we draw into them
+    # instead of making one Figure per flavour. The shared figure is yielded once
+    # at the end rather than per flavour.
+    own_fig = axes is None
+    if not own_fig and len(axes) < len(flavours):
+        raise ValueError(f"Got {len(axes)} axes for {len(flavours)} flavours.")
 
     has_separate_axis = separate_axis is not None and len(separate_axis) > 0
     if not has_separate_axis:
@@ -86,8 +93,11 @@ def plot_grids(grids: list[XPlottingGrid],
     newgrids = _normalise(grids, normalise_to)
 
     for flidx, fl in enumerate(flavours):
-        fig, ax = make_figure()
-        
+        if own_fig:
+            fig, ax = make_figure()
+        else:
+            ax = axes[flidx]
+
         if has_separate_axis:
             ax_twin = ax.twinx()
 
@@ -126,7 +136,7 @@ def plot_grids(grids: list[XPlottingGrid],
             else:
               ax_twin.set(**{key: kwargs_twinx[key]})
 
-        if savepath is not None:
+        if own_fig and savepath is not None:
           savepath.mkdir(parents=True, exist_ok=True)
           # Compute outside the f-string: backslashes in an f-string expression
           # are a SyntaxError before Python 3.12.
@@ -138,4 +148,8 @@ def plot_grids(grids: list[XPlottingGrid],
           fig.savefig(savepath / filename)
           plt.close(fig)
 
-        yield fig
+        if own_fig:
+            yield fig
+
+    if not own_fig:
+        yield axes[0].figure
