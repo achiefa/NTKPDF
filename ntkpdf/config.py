@@ -22,8 +22,16 @@ log = logging.getLogger(__name__)
 
 NO_PREFACTORS = frozenset({"remove_prefactors": True}.items())
 NN = frozenset({"exclude_layers":('impose_msr',), "remove_prefactors": True}.items())
-NO_SMR = frozenset({"exclude_layers":('impose_msr')}.items()) 
+NO_SMR = frozenset({"exclude_layers":('impose_msr')}.items())
 FULL_MODEL = frozenset({})
+
+def layer_kwargs(layers, cumulative=True, base=NN):
+    """Build the colibri NTK ``kwargs`` frozenset for a layer-restricted NTK on top of
+    a base selector. ``layers`` are 1-based NN (Dense) layer indices. With
+    ``cumulative`` the gradient is restricted to layers 1..max(layers) (the cumulative
+    kernel Theta<=l); otherwise to exactly ``layers`` (e.g. the single-layer Theta_l)."""
+    grad = tuple(range(1, max(layers) + 1)) if cumulative else tuple(layers)
+    return frozenset({**dict(base), "grad_layers": grad}.items())
 
 #----------------------------------------
 # Utilities functions
