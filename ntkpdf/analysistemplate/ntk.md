@@ -23,3 +23,20 @@ single-replica plots are empty unless `--replicas` was given.
 {@plot_eigvals_replica_rank@}
 {@endwith@}
 {@endwith@}
+
+# NTK Frobenius norm
+
+The Frobenius norm $\|K\|_F = \sqrt{\sum_i \lambda_i^2}$ of the NTK as a function of
+epoch, computed from the same `eigenvalue_grid`. The single-replica plots are empty
+unless `--replicas` was given.
+
+## Ensemble
+
+{@plot_frobenius_norm@}
+
+## Single replicas
+
+{@with Replicaspecs@}
+### Replica {@replica_index@}
+{@plot_frobenius_norm_replica@}
+{@endwith@}
