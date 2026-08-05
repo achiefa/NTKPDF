@@ -194,6 +194,50 @@ initialisation in one shared production.
 The base model is mutated in place and reused; this is safe under reportengine's sequential
 execution because each grid is materialised to NumPy before the next mutation.
 
+### The NTK model interface (`ntkpdf/model.py`)
+
+**There are two model-build paths and they are not the same object.** The one above
+(`produce_base_metamodels`) builds a *multi-replica* keras model for PDF **grids/plots**.
+The NTK path needs something different: a *single-replica* model exposed as a **pure JAX
+function of the flat weight vector**, so `jax.jacfwd` can differentiate it. That is
+`NTKPDFN3Fit.grid_values_func(xgrid, exclude_layers, remove_prefactors, grad_layers)`,
+consumed by `colibri.ntk.ntkutils.compute_ntk` and by `ntkpdf/hessian.py`. The kwargs come
+from the selector frozensets in `config.py` (`FULL_MODEL`/`NO_PREFACTORS`/`NN`/`NO_SMR`,
+and `layer_kwargs(...)` for the layer-restricted kernel). Both paths force keras
+`floatx=float64` so they agree bit-for-bit.
+
+This module replaces **colibri-n3fit**, which ntkpdf used to depend on. That package exists
+to drive *colibri's fitting machinery* with an n3fit network; ntkpdf never runs a fit, so
+only the model class was needed. Do not reintroduce the dependency.
+
+**The monkeypatch — the non-obvious part.** colibri's NTK providers do not *receive* a
+model; they *load* one themselves, by fit **name**, from inside `ThreadPoolExecutor` workers
+(`colibri/ntk/ntkutils.py`, `colibri/ntk/ntk.py`), via `colibri.utils.get_pdf_model`. Only a
+string crosses into the worker, so there is no argument through which ntkpdf can inject its
+model. `ntkpdf.model.install()` therefore rebinds `get_pdf_model` over colibri's. Two traps:
+
+- Those modules bind the name with `from colibri.utils import get_pdf_model`, so each holds
+  **its own reference** — patching `colibri.utils` alone reaches none of them. Every module
+  in `_PATCH_TARGETS` must be rebound. (`ntkpdf/hessian.py` imports it *inside* the function,
+  so it resolves at call time and needs no special handling.)
+- `install()` is called at **module level in `ntkpdf/app.py`** — not in `ntkpdf/__init__.py`
+  (which would drag jax/keras into every bare `import ntkpdf`) and not in `NTKApp.__init__`
+  (which the API path never calls). Both entry points import `app.py`: the CLI via `NTKApp`,
+  the API because `ntkpdf/api.py` imports `ntk_providers` from it. A notebook that calls
+  colibri's NTK providers **directly**, without going through `ntkpdf.api`, must call
+  `install()` itself — see `examples/layer_ntk.ipynb`.
+
+Unlike colibri's loader, ours takes no `pdf_model.pkl`: it builds from the fit's own
+`filter.yml` (`_model_init_args`, the same runcard keys `produce_model_info` reads) and loads
+the replica's fitted preprocessing exponents from `nnfit/replica_<r>/<fit>.json`. The pkl
+that n3fit's `model_trainer.py` writes for colibri is now unused by ntkpdf.
+
+The patch is invisible from colibri's side: if colibri grows a *new* `from colibri.utils
+import get_pdf_model` site, that site silently keeps the old loader and will try to import
+`colibri_n3fit`. `install()` raises if a target loses the symbol, but cannot see a new one —
+so after bumping colibri, re-run a report with `colibri_n3fit` **uninstalled**. That is the
+only test that catches it.
+
 ### NTKStats and the diagonal-covmat convention
 
 `NTKStats` (from `colibri.ntk.ntkutils`) is the central container: a stack of per-replica

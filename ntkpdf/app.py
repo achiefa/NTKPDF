@@ -10,6 +10,15 @@ from colibri.config import Environment
 from validphys.app import App, providers
 
 from ntkpdf.config import ntkConfig
+from ntkpdf.model import install as _install_pdf_model_loader
+
+# colibri's NTK providers load the PDF model themselves, by fit name, from inside
+# worker threads -- so this is the only way to give them ntkpdf's model instead of
+# colibri-n3fit's. Done here rather than in ``ntkpdf/__init__.py`` (which would drag
+# jax/keras into every bare ``import ntkpdf``) and not in ``NTKApp.__init__`` (which
+# the API path never calls). Both entry points import this module: the CLI via
+# ``NTKApp``, the API because ``ntkpdf.api`` imports ``ntk_providers`` from here.
+_install_pdf_model_loader()
 
 validphys_providers = providers
 colibri_providers = [
