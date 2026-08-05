@@ -51,19 +51,6 @@ _PATCH_TARGETS = (
     "colibri.checks",  # fitting-side, off ntkpdf's path; rebound for uniformity
 )
 
-# Opt-in escape hatch for fits whose ``nnfit/replica_<r>/<fit>.json`` was never written
-# (n3fit can die after training, before ``writer.py`` dumps it). Without the file the
-# fitted preprocessing exponents are unrecoverable -- ``params_<epoch>.npz`` stores only
-# the *trainable* weights, and with ``trainable: false`` in the runcard the exponents are
-# not among them. Setting this true makes :func:`get_pdf_model` fall back to the model's
-# own (seed-initialised) exponents instead of raising.
-#
-# Only safe when the caller then discards the prefactors anyway -- i.e. the
-# ``no_prefactors``/``nn`` selectors, where ``remove_prefactors`` overrides them to
-# alpha=1, beta=0. It is OFF by default so that asking for the *full* model on such a fit
-# still fails loudly rather than silently returning the wrong kernel.
-ALLOW_MISSING_PREPROCESSING = False
-
 
 # ----------------------------------------
 # The model
@@ -406,21 +393,9 @@ def get_pdf_model(colibri_fit, replica_idx=None):
     )
 
     if replica_idx is not None:
-        try:
-            weights = _replica_preprocessing(fit.path, fit.name, replica_idx)
-        except FileNotFoundError:
-            if not ALLOW_MISSING_PREPROCESSING:
-                raise
-            log.warning(
-                "%s: no preprocessing JSON for replica %s -- keeping the model's own "
-                "exponents. Valid only if the prefactors are being removed anyway.",
-                fit.name,
-                replica_idx,
-            )
-        else:
-            pdf_model.n3fit_model.get_layer(
-                PREPROCESSING_LAYER_ALL_REPLICAS
-            ).set_weights(weights)
+        pdf_model.n3fit_model.get_layer(PREPROCESSING_LAYER_ALL_REPLICAS).set_weights(
+            _replica_preprocessing(fit.path, fit.name, replica_idx)
+        )
 
     return pdf_model
 
