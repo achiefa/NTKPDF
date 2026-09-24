@@ -312,10 +312,10 @@ class ntkConfig(colibriConfig):
         # Build the model in double precision so its *weights* are float64 (not
         # merely a float64-typed output of a float32 model). colibri's
         # ``Environment`` has already enabled ``jax_enable_x64`` by the time this
-        # runs, so float64 here is genuine; this matches what colibri-n3fit's
-        # ``N3FitPDFModel`` forces on the NTK path, keeping the two model-build
-        # paths at the same precision. Done here (at build time) rather than at
-        # import to avoid toggling JAX state before it initialises.
+        # runs, so float64 here is genuine; this matches what
+        # ``ntkpdf.model.NTKPDFN3Fit`` forces on the NTK path, keeping the two
+        # model-build paths at the same precision. Done here (at build time)
+        # rather than at import to avoid toggling JAX state before it initialises.
         import keras
 
         keras.backend.set_floatx("float64")

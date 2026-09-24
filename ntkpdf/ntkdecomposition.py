@@ -138,7 +138,7 @@ class EvolutionOperator:
         self.M = self.Fk.T @ self.Cinv @ self.Fk
 
     def _time_factor(self, training_time: float):
-        return 2 * training_time / self.Cinv.shape[0]
+        return 2 * training_time
 
     def u_check(self, training_time: float) -> NTKStats:
         M = self.M
@@ -215,7 +215,7 @@ def compute_ntk_decomposition_by_replica_at_epoch(
     eigenvalues,
     eigenvectors,
     M: pd.DataFrame,
-    tol: float = 1e-07,
+    tol: float = 1e-12,
     pad: bool = True,
 ) -> NTKDecomposition:
     """
@@ -298,7 +298,7 @@ def compute_ntk_decomposition_ensemble(
     fk_diagonal_basis_train_val, 
     cinv_diagonal_basis_train_val,
     m_matrix_train_val,
-    tol: float = 1e-7,
+    tol: float = 1e-12,
     training: bool = True,
 ) -> EvolutionOperator:
     """
@@ -328,7 +328,7 @@ def compute_ntk_decomposition_ensemble(
     NTKDecompositionEnsemble
     """
     idx_tr_val = 0 if training else 1
-    M = m_matrix_train_val[0]
+    M = m_matrix_train_val[idx_tr_val]
     Cinv = cinv_diagonal_basis_train_val[idx_tr_val]
     FK = fk_diagonal_basis_train_val[idx_tr_val]
 
