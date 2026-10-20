@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/1260769576.svg)](https://doi.org/10.5281/zenodo.23495650)
+
 # ntkpdf
 
 A tool for the **Neural Tangent Kernel (NTK)** analysis of trained
