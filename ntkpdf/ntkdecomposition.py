@@ -151,7 +151,7 @@ class EvolutionOperator:
         Qtilde = qt @ M @ P_parallel
 
         one_minus_exp = h.exp_kernel(self._time_factor(training_time))
-        U_check = q @ hinv @ one_minus_exp @ Qtilde
+        U_check = -1.0 * (q @ hinv @ one_minus_exp @ Qtilde)
         return U_check
     
     def u_hat(self, training_time: float) -> NTKStats:
