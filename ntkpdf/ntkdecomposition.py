@@ -151,8 +151,6 @@ class EvolutionOperator:
         Qtilde = qt @ M @ P_parallel
 
         one_minus_exp = h.exp_kernel(self._time_factor(training_time))
-        # Negative: the gradient 2(M f - b) drives the perp modes with -M P_par f0
-        # and +b, so this term has the opposite sign to the data term in ``v``.
         U_check = -1.0 * (q @ hinv @ one_minus_exp @ Qtilde)
         return U_check
     
