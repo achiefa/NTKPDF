@@ -63,3 +63,10 @@ def test_cache_filename_is_name_keyed():
     assert model_file != nn_file
     assert "model" in model_file
     assert "nn" in nn_file
+
+
+@pytest.mark.parametrize("selector", [NN, NO_SMR])
+def test_exclude_layers_is_a_tuple_of_layer_names(selector):
+    """``exclude_layers`` is matched against whole layer names, so it must be a
+    tuple: a bare string would be split into characters and match nothing."""
+    assert dict(selector)["exclude_layers"] == ("impose_msr",)

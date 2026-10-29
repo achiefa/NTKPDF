@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 
 NO_PREFACTORS = frozenset({"remove_prefactors": True}.items())
 NN = frozenset({"exclude_layers":('impose_msr',), "remove_prefactors": True}.items())
-NO_SMR = frozenset({"exclude_layers":('impose_msr')}.items())
+NO_SMR = frozenset({"exclude_layers":('impose_msr',)}.items())
 FULL_MODEL = frozenset({})
 
 def layer_kwargs(layers, cumulative=True, base=NN):
