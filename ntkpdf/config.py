@@ -56,12 +56,25 @@ def _unpack_params(shapes, weights, prepr):
     )
     return params_dict
 
-def set_epoch_weights(metamodels, weights, fit_preprocessing, nreplicas):
+def _neutral_preprocessing(prepr):
+    """Preprocessing weights are ordered [alpha, beta] per flavour and the
+    prefactor x^(1-alpha)*(1-x)^beta is neutralised by alpha=1, beta=0."""
+    return [np.full_like(w, 1.0 if j % 2 == 0 else 0.0) for j, w in enumerate(prepr)]
+
+def _has_no_prefactors(model_selector):
+    return model_selector is not None and model_selector.get("no_prefactors")
+
+def set_epoch_weights(metamodels, weights, fit_preprocessing, nreplicas, model_selector=None):
     """Load one epoch's per-replica ``weights`` (flat vectors) and
     ``fit_preprocessing`` into the shared ``metamodels`` in place, and return it.
     Shared by the per-epoch providers and by the streaming loss loop in
     ``ntkpdf.data_theory`` (kept module-level so the latter need not go through a
-    config method)."""
+    config method).
+
+    Loading rewrites the preprocessing layer too, undoing whatever
+    :func:`_apply_model_selector` set, so ``model_selector`` is re-applied here."""
+    if _has_no_prefactors(model_selector):
+        fit_preprocessing = [_neutral_preprocessing(p) for p in fit_preprocessing]
     shapes = [list(v.shape) for v in metamodels.get_replica_weights(0)["all_NNs"]]
     for idx in range(nreplicas):
         parameters = _unpack_params(shapes, weights[idx], fit_preprocessing[idx])
@@ -91,19 +104,14 @@ def _apply_model_selector(pdf_model, nreplicas, model_selector=None):
     the result is independent of the order in which selectors are applied to the
     shared, mutated base.
     """
-    no_prefactors = model_selector is not None and model_selector.get("no_prefactors")
+    no_prefactors = _has_no_prefactors(model_selector)
     if no_prefactors:
         log.info("Generating PDF model with no prefactors (i.e. small-x and large-x exponents set to 1 and 0, respectively).")
 
     for i in range(nreplicas):
         original = pdf_model._ntk_base_preprocessing[i]
         if no_prefactors:
-            # Preprocessing weights are ordered [alpha, beta] per flavour and the
-            # prefactor x^(1-alpha)*(1-x)^beta is neutralised by alpha=1, beta=0.
-            new_prepr = [
-                np.full_like(w, 1.0 if j % 2 == 0 else 0.0)
-                for j, w in enumerate(original)
-            ]
+            new_prepr = _neutral_preprocessing(original)
         else:
             new_prepr = [w.copy() for w in original]
 
@@ -402,9 +410,9 @@ class ntkConfig(colibriConfig):
         """Return the model at initialisation in the NTKStats format."""
         return predict_pdf_grid(metamodels, input_grid)
     
-    def produce_model_at_epoch(self, fit_weights, fit_preprocessing, metamodels, nreplicas, vetoname=None):
+    def produce_model_at_epoch(self, fit_weights, fit_preprocessing, metamodels, nreplicas, model_selector=None, vetoname=None):
         """Get the PDF model at the specified epoch, with the corresponding weights."""
-        pdf_models = set_epoch_weights(metamodels, fit_weights, fit_preprocessing, nreplicas)
+        pdf_models = set_epoch_weights(metamodels, fit_weights, fit_preprocessing, nreplicas, model_selector)
 
         vetoes = np.array([True] * nreplicas)
         if vetoname:

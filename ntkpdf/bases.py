@@ -9,7 +9,7 @@ from n3fit.vpinterface import EVOL_LIST
 #
 # while EVOL_LIST (which is also the ordering of the output of the PDF model)
 #
-#  photon sigma g V T3 V3 T8 V8 T15 V15 T24 V24 T35 V35
+#  photon sigma g V V3 V8 V15 V24 V35 T3 T8 T15 T24 T35
 #
 # You should be able the reorder the output of the PDF model using the following permutation:
 #

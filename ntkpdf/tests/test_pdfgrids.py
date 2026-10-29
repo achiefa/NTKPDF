@@ -50,3 +50,23 @@ def test_pdf_grid_all_epochs_are_per_epoch():
     # And the epochs are genuinely distinct, so the per-epoch match above is a
     # real constraint rather than vacuously true.
     assert not np.allclose(_data(grids[0]), _data(grids[-1]))
+
+
+def test_pdf_at_epoch_honours_no_prefactors(ntk_fit):
+    """``no_prefactors`` must survive loading an epoch's weights (which also
+    rewrites the preprocessing layer), matching the NTK path's
+    ``remove_prefactors``."""
+    from ntkpdf.model import get_pdf_model
+    from ntkpdf.utils import XGRID
+
+    epoch = 100
+    selector = {"name": "no_prefactors", "no_prefactors": True}
+    stripped = np.asarray(API.pdf_at_epoch(fit=FIT, epoch=epoch, model_selector=selector).data)
+    full = np.asarray(API.pdf_at_epoch(fit=FIT, epoch=epoch).data)
+    assert not np.allclose(stripped, full)
+
+    stripped = stripped.reshape(stripped.shape[0], 14, -1)
+    for idx, replica in enumerate(stripped, start=1):
+        w = np.load(ntk_fit.path / f"fit_replicas/replica_{idx}/parameters/params_{epoch}.npz")["params"]
+        expected = get_pdf_model(FIT, idx).grid_values_func(XGRID, remove_prefactors=True)(w)
+        np.testing.assert_array_equal(replica, np.asarray(expected))

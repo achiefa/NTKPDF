@@ -463,7 +463,8 @@ def loss_function_grid(fit,
                        input_grid,
                        cinv_diagonal_basis_train_val,
                        fk_diagonal_basis_train_val,
-                       get_train_val_data):
+                       get_train_val_data,
+                       model_selector=None):
     """
     Build :class:`LossGrid` classes for the training and validation loss
     functions of a fit over ``stored_epochs``.
@@ -499,7 +500,7 @@ def loss_function_grid(fit,
             np.load(wreplica_paths[idx] / "parameters" / f"params_{epoch}.npz")["params"]
             for idx in range(nreplicas)
         ]
-        set_epoch_weights(metamodels, weights, fit_preprocessing, nreplicas)
+        set_epoch_weights(metamodels, weights, fit_preprocessing, nreplicas, model_selector)
         f = predict_pdf_grid(metamodels, input_grid)
 
         res_tr = tr_data - fk_tr @ f
