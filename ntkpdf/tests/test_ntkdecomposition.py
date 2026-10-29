@@ -115,20 +115,11 @@ EXTRA_ROWS = arrays(np.float64, (2, N), elements=st.floats(-1, 1))
 
 @settings(deadline=None, max_examples=20)
 @given(eigensystems(), EXTRA_ROWS)
-def test_v_matches_gradient_flow(system, extra_rows):
+def test_evolution_operator_matches_gradient_flow(system, extra_rows):
+    """u and v against the exact solution. At t=0 the u_check and data terms
+    both vanish, so only t > 0 can see a sign error in either (as u_check had)."""
     for t in TIMES:
-        Fk, _, V = _gradient_flow(system, extra_rows, t)
-        np.testing.assert_allclose(np.asarray(_operator(system, Fk).v(t).data)[0], V, atol=1e-9)
-
-
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "EvolutionOperator.u_check has the wrong sign: the perp response to the "
-    "parallel part of f0 is -Q h^-1 (1 - e^{-2ht}) Qᵀ M P_par f0 (the same "
-    "gradient gives v its + sign), but ntkdecomposition.py adds it."
-))
-@settings(deadline=None, max_examples=20)
-@given(eigensystems(), EXTRA_ROWS)
-def test_u_matches_gradient_flow(system, extra_rows):
-    for t in TIMES:
-        Fk, U, _ = _gradient_flow(system, extra_rows, t)
-        np.testing.assert_allclose(np.asarray(_operator(system, Fk).u(t).data)[0], U, atol=1e-9)
+        Fk, U, V = _gradient_flow(system, extra_rows, t)
+        op = _operator(system, Fk)
+        np.testing.assert_allclose(np.asarray(op.u(t).data)[0], U, atol=1e-9)
+        np.testing.assert_allclose(np.asarray(op.v(t).data)[0], V, atol=1e-9)
