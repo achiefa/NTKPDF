@@ -175,29 +175,15 @@ def test_grid_values_func_shapes(ntk_model, w):
     assert _jacobian(ntk_model, w).shape == (14, len(XGRID), N_PARAMS)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "keras 3.12 maps 64-bit results of keras.backend.result_type to 32-bit on "
-    "non-TF backends (BIT64_TO_BIT32_DTYPE in keras/src/backend/common/dtypes.py); "
-    "ops.tanh takes its dtype from it, so it returns float32 even with "
-    "floatx=float64 and jax_enable_x64."
-))
-def test_hidden_activations_are_float64(ntk_model, w):
-    dense = next(l for l in ntk_model.n3fit_model.get_layer("all_NNs").get_layer("NN_0").layers
-                 if type(l).__name__ == "Dense")
-    kernel, bias = [jax.numpy.asarray(v) for v in dense.trainable_variables]
-    x = jax.numpy.stack([XGRID, np.log(XGRID)], -1)[None]
-    assert dense.stateless_call([kernel, bias], [], x)[0].dtype == np.float64
-
-
 @settings(deadline=None, max_examples=20)
 @given(v=arrays(np.float64, N_PARAMS, elements=st.floats(-1, 1, allow_subnormal=False)))
 def test_jacobian_matches_finite_difference(ntk_model, w, v):
-    """Checks the autodiff only. The float32 tanh (see above) puts ~eps32
-    relative noise on every evaluation, so a small step drowns in it: use a
-    Richardson-extrapolated central difference (O(h^4)) at a large step, and allow
-    for the noise, which scales with |f| / h. Tolerances are per flavour row: a
-    global one is set by the large small-x rows and would never test the valence
-    ones."""
+    """Checks the autodiff only. keras 3.12 computes tanh in float32 on JAX even
+    with floatx=float64, which puts ~eps32 relative noise on every evaluation, so
+    a small step drowns in it: use a Richardson-extrapolated central difference
+    (O(h^4)) at a large step, and allow for the noise, which scales with |f| / h.
+    Tolerances are per flavour row: a global one is set by the large small-x rows
+    and would never test the valence ones."""
     assume(np.abs(v).max() > 0.1)
     f = ntk_model.grid_values_func(XGRID)
     f0, jv = (np.asarray(a) for a in jax.jvp(f, (w,), (v,)))

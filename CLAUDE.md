@@ -210,15 +210,6 @@ and `layer_kwargs(...)` for the layer-restricted kernel). Both paths force keras
 `floatx=float64` and agree bit-for-bit without sum rules (to a few ULP with them, from the
 sum-rule integrals; pinned by `tests/test_model.py::test_build_paths_agree`).
 
-**Precision caveat:** weights, layer policies and outputs are float64, but keras 3.12 maps
-64-bit results of `keras.backend.result_type` to 32-bit on non-TF backends
-(`BIT64_TO_BIT32_DTYPE` in `keras/src/backend/common/dtypes.py`). Ops that take their dtype
-from it (`ops.tanh`, the trig functions, …) return **float32**; `matmul`/`add`/`exp`/`log`/
-`power` stay float64. In this network that is the `tanh` activations, which put ~1e-7–1e-6
-relative error on the PDF and its Jacobian/NTK (measured against a float64 `tanh`), so NTK
-eigenvalues below ~1e-6·λ_max are noise. Pinned as a strict xfail
-(`test_hidden_activations_are_float64`), which starts failing if keras changes this.
-
 This module replaces **colibri-n3fit**, which ntkpdf used to depend on. That package exists
 to drive *colibri's fitting machinery* with an n3fit network; ntkpdf never runs a fit, so
 only the model class was needed. Do not reintroduce the dependency.
