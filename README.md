@@ -10,6 +10,9 @@ the weights it saved to disk (at multiple training epochs), rebuilds the `n3fit`
 PDF model in memory, and produces a report with eigenvalue spectra, PDF grids at
 initialisation, training/validation loss curves, and related NTK diagnostics.
 
+This repository was used to produce the results presented in
+[arXiv:2610.36034](https://arxiv.org/abs/2610.36034).
+
 It is a thin [`reportengine`](https://github.com/NNPDF/reportengine) application
 layered on top of two upstream packages:
 
