@@ -207,7 +207,14 @@ function of the flat weight vector**, so `jax.jacfwd` can differentiate it. That
 consumed by `colibri.ntk.ntkutils.compute_ntk` and by `ntkpdf/hessian.py`. The kwargs come
 from the selector frozensets in `config.py` (`FULL_MODEL`/`NO_PREFACTORS`/`NN`/`NO_SMR`,
 and `layer_kwargs(...)` for the layer-restricted kernel). Both paths force keras
-`floatx=float64` so they agree bit-for-bit.
+`floatx=float64` and agree bit-for-bit without sum rules (within ~1 ULP with them, from the
+sum-rule integrals; pinned by `tests/test_model.py::test_build_paths_agree`).
+
+**Precision caveat:** weights, layer policies and outputs are float64, but keras 3.12 casts
+every 64-bit op result to 32-bit on non-TF backends (`BIT64_TO_BIT32_DTYPE` in
+`keras/src/backend/common/dtypes.py`), so `ops.tanh` returns **float32**: hidden activations,
+and hence the Jacobian/NTK, carry ~1e-8 relative noise. Pinned as a strict xfail
+(`test_hidden_activations_are_float64`), which will start failing if keras changes this.
 
 This module replaces **colibri-n3fit**, which ntkpdf used to depend on. That package exists
 to drive *colibri's fitting machinery* with an n3fit network; ntkpdf never runs a fit, so
