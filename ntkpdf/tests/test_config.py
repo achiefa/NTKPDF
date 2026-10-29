@@ -12,12 +12,23 @@ of the ``Eigenvaluesconfigs`` wiring: each entry there carries only a ``name``
 (``model``/``nn``), and that name alone must select the right modifier.
 """
 
+from pathlib import Path
+
+import numpy as np
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from reportengine.configparser import ConfigError
 
 from ntkpdf.api import API
-from ntkpdf.config import FULL_MODEL, NN, NO_PREFACTORS, NO_SMR
+from ntkpdf.config import (
+    FULL_MODEL, NN, NO_PREFACTORS, NO_SMR, _apply_model_selector, _sort_replicas,
+    layer_kwargs, ntkConfig, set_epoch_weights,
+)
+from ntkpdf.tests.conftest import (
+    N_PARAMS, SYNTHETIC_EPOCHS, SYNTHETIC_NREPLICAS, neutral_preprocessing,
+)
 
 
 @pytest.mark.parametrize(
@@ -75,15 +86,6 @@ def test_exclude_layers_is_a_tuple_of_layer_names(selector):
 # ----------------------------------------
 # Fit discovery and weight loading, on the synthetic fit
 #########################################
-from pathlib import Path
-
-import numpy as np
-from hypothesis import given
-from hypothesis import strategies as st
-
-from ntkpdf.config import _apply_model_selector, _sort_replicas, layer_kwargs, ntkConfig, set_epoch_weights
-from ntkpdf.tests.conftest import N_PARAMS, SYNTHETIC_EPOCHS, SYNTHETIC_NREPLICAS
-
 NO_PREFACTORS_SELECTOR = {"name": "no_prefactors", "no_prefactors": True}
 
 
@@ -106,15 +108,17 @@ def test_fit_discovery(synthetic_fit):
     assert list(config.produce_replicas(synthetic_fit)) == replicas
     assert config.produce_nreplicas(synthetic_fit) == SYNTHETIC_NREPLICAS
     assert config.produce_nreplicas(synthetic_fit, custom_nreplicas=1) == 1
+    # Numeric order (10, 20, 100), not glob or lexicographic, and without the
+    # best epoch, which is also stored on disk.
     stored = config.produce_stored_epochs(synthetic_fit, config.produce_best_epochs(synthetic_fit))
-    assert list(stored) == list(SYNTHETIC_EPOCHS[:-1])  # the best epoch is excluded
+    assert list(stored) == list(SYNTHETIC_EPOCHS)
     assert list(config.produce_epochs(stored, custom_epochs=[20])) == [20]
-    assert config.produce_epochs(stored) is stored
+    assert list(config.produce_epochs(stored)) == list(stored)
 
 
 def test_fit_weights_per_replica_epochs(synthetic_fit):
     config = ntkConfig({})
-    epochs = list(SYNTHETIC_EPOCHS)
+    epochs = list(SYNTHETIC_EPOCHS[:SYNTHETIC_NREPLICAS])
     weights = config.produce_fit_weights(synthetic_fit, epochs)
     for r, (w, e) in enumerate(zip(weights, epochs), start=1):
         path = synthetic_fit.path / f"fit_replicas/replica_{r}/parameters/params_{e}.npz"
@@ -139,7 +143,7 @@ def test_set_epoch_weights_round_trip(synthetic_fit, metamodels, selector):
     set_epoch_weights(metamodels, weights, prepr, SYNTHETIC_NREPLICAS, selector)
     for i in range(SYNTHETIC_NREPLICAS):
         np.testing.assert_array_equal(_flat_nn(metamodels, i), weights[i])
-        expected = prepr[i] if selector is None else np.tile([1.0, 0.0], len(prepr[i]) // 2)
+        expected = prepr[i] if selector is None else neutral_preprocessing(synthetic_fit)
         np.testing.assert_array_equal(_prepr(metamodels, i), expected)
 
 

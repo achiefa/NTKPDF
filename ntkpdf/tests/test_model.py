@@ -16,7 +16,6 @@ from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 
-import ntkpdf  # noqa: F401 -- sets KERAS_BACKEND before keras is imported
 import jax
 from n3fit.backends.keras_backend.MetaModel import PREPROCESSING_LAYER_ALL_REPLICAS
 
@@ -28,6 +27,7 @@ from ntkpdf.config import (
 from ntkpdf.model import _model_init_args, _nn_layer_param_ranges, _replica_preprocessing, get_pdf_model
 from ntkpdf.tests.conftest import (
     ACTIVATIONS, BASIS_FL, N_PARAMS, NODES, SYNTHETIC_EPOCHS, SYNTHETIC_NREPLICAS,
+    neutral_preprocessing,
 )
 from ntkpdf.utils import INPUT_GRID, XGRID
 
@@ -102,7 +102,8 @@ def _resolve_import(module, node):
 
 def test_patch_targets_cover_every_colibri_import_site():
     """``install()`` cannot see a *new* ``from colibri.utils import get_pdf_model``
-    site in colibri; this static scan does."""
+    site in colibri; this static scan does. Only module-level imports bind a name
+    that needs rebinding: a function-local one resolves at call time."""
     import colibri
 
     root = Path(colibri.__file__).parent
@@ -112,9 +113,7 @@ def test_patch_targets_cover_every_colibri_import_site():
         if "tests" in rel.parts:
             continue
         module = ".".join(rel.parts)
-        if path.name == "__init__.py":
-            module = module.rsplit(".", 1)[0] + ".__init__"
-        for node in ast.walk(ast.parse(path.read_text())):
+        for node in ast.parse(path.read_text()).body:
             if (
                 isinstance(node, ast.ImportFrom)
                 and _resolve_import(module, node) == "colibri.utils"
@@ -176,10 +175,11 @@ def test_grid_values_func_shapes(ntk_model, w):
     assert _jacobian(ntk_model, w).shape == (14, len(XGRID), N_PARAMS)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "keras 3.12 casts every 64-bit op result to 32-bit on non-TF backends "
-    "(BIT64_TO_BIT32_DTYPE in keras/src/backend/common/dtypes.py), so ops.tanh "
-    "returns float32 even with floatx=float64 and jax_enable_x64."
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "keras 3.12 maps 64-bit results of keras.backend.result_type to 32-bit on "
+    "non-TF backends (BIT64_TO_BIT32_DTYPE in keras/src/backend/common/dtypes.py); "
+    "ops.tanh takes its dtype from it, so it returns float32 even with "
+    "floatx=float64 and jax_enable_x64."
 ))
 def test_hidden_activations_are_float64(ntk_model, w):
     dense = next(l for l in ntk_model.n3fit_model.get_layer("all_NNs").get_layer("NN_0").layers
@@ -192,10 +192,12 @@ def test_hidden_activations_are_float64(ntk_model, w):
 @settings(deadline=None, max_examples=20)
 @given(v=arrays(np.float64, N_PARAMS, elements=st.floats(-1, 1, allow_subnormal=False)))
 def test_jacobian_matches_finite_difference(ntk_model, w, v):
-    """Checks the autodiff only. The float32 hidden activations (see above) put
-    ~eps32 relative noise on every evaluation, so a small step drowns in it: use a
+    """Checks the autodiff only. The float32 tanh (see above) puts ~eps32
+    relative noise on every evaluation, so a small step drowns in it: use a
     Richardson-extrapolated central difference (O(h^4)) at a large step, and allow
-    for the noise, which scales with |f| / step rather than with |Jv|."""
+    for the noise, which scales with |f| / h. Tolerances are per flavour row: a
+    global one is set by the large small-x rows and would never test the valence
+    ones."""
     assume(np.abs(v).max() > 0.1)
     f = ntk_model.grid_values_func(XGRID)
     f0, jv = (np.asarray(a) for a in jax.jvp(f, (w,), (v,)))
@@ -204,8 +206,8 @@ def test_jacobian_matches_finite_difference(ntk_model, w, v):
         return (np.asarray(f(w + h * v)) - np.asarray(f(w - h * v))) / (2 * h)
 
     h = 1e-2
-    noise = 10 * np.finfo(np.float32).eps * np.abs(f0).max() / (h * np.abs(v).max())
-    np.testing.assert_allclose((4 * cd(h / 2) - cd(h)) / 3, jv, rtol=0, atol=1e-3 * np.abs(jv).max() + noise)
+    atol = 1e-3 * np.abs(jv).max(axis=1) + 10 * np.finfo(np.float32).eps * np.abs(f0).max(axis=1) / h
+    assert np.all(np.abs((4 * cd(h / 2) - cd(h)) / 3 - jv) <= atol[:, None])
 
 
 def test_photon_row_is_zero(ntk_model, w):
@@ -253,7 +255,7 @@ def test_remove_prefactors_matches_neutral_weights(synthetic_fit, ntk_model, w):
 
     neutral = get_pdf_model(synthetic_fit)
     layer = neutral.n3fit_model.get_layer(PREPROCESSING_LAYER_ALL_REPLICAS)
-    layer.set_weights([np.full_like(p, 1.0 if j % 2 == 0 else 0.0) for j, p in enumerate(layer.get_weights())])
+    layer.set_weights([np.full_like(p, e) for p, e in zip(layer.get_weights(), neutral_preprocessing(synthetic_fit))])
     np.testing.assert_array_equal(stripped, _pdf(neutral, w))
 
 
@@ -281,17 +283,18 @@ def _kernel(model, w, kwargs):
 
 
 def test_layer_kernels_add_up(ntk_model, w):
-    ranges = _nn_layer_param_ranges(ntk_model.n3fit_model)
-    assert ranges[0][0] == 0 and ranges[-1][1] == N_PARAMS
-    assert all(a[1] == b[0] for a, b in zip(ranges, ranges[1:]))
-
+    """The layer ranges partition the parameters (``test_layer_param_ranges``), so
+    the single-layer kernels sum to the full NN kernel, and each cumulative kernel
+    adds exactly its own layer to the previous one."""
+    n_layers = len(_nn_layer_param_ranges(ntk_model.n3fit_model))
+    single = [_kernel(ntk_model, w, layer_kwargs((l,), cumulative=False)) for l in range(1, n_layers + 1)]
+    cumulative = [_kernel(ntk_model, w, layer_kwargs((l,))) for l in range(1, n_layers + 1)]
     nn = _kernel(ntk_model, w, NN)
-    layers = range(1, len(ranges) + 1)
-    summed = sum(_kernel(ntk_model, w, layer_kwargs((l,), cumulative=False)) for l in layers)
-    cumulative = _kernel(ntk_model, w, layer_kwargs((len(ranges),)))
-    atol = 1e-12 * np.abs(nn).max()
-    np.testing.assert_allclose(summed, nn, rtol=1e-10, atol=atol)
-    np.testing.assert_allclose(cumulative, nn, rtol=1e-10, atol=atol)
+    tol = dict(rtol=1e-10, atol=1e-12 * np.abs(nn).max())
+    np.testing.assert_allclose(sum(single), nn, **tol)
+    np.testing.assert_allclose(cumulative[0], single[0], **tol)
+    for l in range(1, n_layers):
+        np.testing.assert_allclose(cumulative[l] - cumulative[l - 1], single[l], **tol)
 
 
 # ----------------------------------------
@@ -301,7 +304,7 @@ def test_layer_kernels_add_up(ntk_model, w):
 def test_build_paths_agree(synthetic_fit, metamodels, no_prefactors):
     """The keras grid path (multi-replica ``MetaModel``) and the NTK path
     (single-replica, pure JAX) give the same PDFs at a saved epoch: bit-identical
-    without sum rules, within ~1 ULP with them (the sum-rule integrals)."""
+    without sum rules, within a few ULP with them (the sum-rule integrals)."""
     config = ntkConfig({})
     selector = {"name": "s", "no_prefactors": no_prefactors}
     set_epoch_weights(
@@ -319,3 +322,26 @@ def test_build_paths_agree(synthetic_fit, metamodels, no_prefactors):
             np.testing.assert_allclose(grid[r - 1], expected, rtol=1e-13, atol=0)
         else:
             np.testing.assert_array_equal(grid[r - 1], expected)
+
+
+def test_colibri_ntk_runs_on_ntkpdf_model(synthetic_fit, tmp_path, monkeypatch, ntk_model, w):
+    """End to end through the monkeypatch: colibri's NTK worker loads the model
+    *by fit name* via the patched ``get_pdf_model`` and must reproduce the
+    eigenvalues of J Jᵀ from ``grid_values_func``."""
+    import shutil
+
+    import ntkpdf.app  # noqa: F401 -- calls install() at import
+    from colibri.ntk.ntkutils import compute_eigenvalues_for_replica, load_replica_eigenvalues
+    from validphys.core import FitSpec
+
+    # A copy, since colibri writes its eigenvalue cache next to the parameters.
+    fit = FitSpec(synthetic_fit.name, shutil.copytree(synthetic_fit.path, tmp_path / synthetic_fit.name))
+    monkeypatch.setattr(model_mod, "_resolve_fit", lambda name: fit)
+    replicas_path = fit.path / "fit_replicas"
+
+    assert compute_eigenvalues_for_replica(fit.name, replicas_path, 1, name="e2e") is not None
+    stored = load_replica_eigenvalues(1, replicas_path, "e2e")
+    J = _jacobian(ntk_model, w).reshape(-1, N_PARAMS)
+    expected = np.sort(np.linalg.eigvalsh(J @ J.T))[::-1]
+    got = np.sort(np.asarray(stored["eigenvalues"])[list(stored["epochs"]).index(EPOCH)])[::-1]
+    np.testing.assert_allclose(got, expected, rtol=0, atol=1e-10 * expected[0])

@@ -52,9 +52,24 @@ def clean_eigenvalue_cache(ntk_fit):
 BASIS_FL = ("sng", "g", "v", "v3", "v8", "t3", "t8", "t15")
 NODES = [4, 8]
 ACTIVATIONS = ["tanh", "linear"]
-SYNTHETIC_EPOCHS = (10, 20)
+SYNTHETIC_EPOCHS = (10, 20, 100)  # stored snapshots; lexicographic order differs
+SYNTHETIC_BEST_EPOCH = 150  # also stored, as n3fit does
 SYNTHETIC_NREPLICAS = 2
 N_PARAMS = 2 * 4 + 4 + 4 * 8 + 8  # (x, log x) -> 4 -> 8
+
+
+def neutral_preprocessing(fit):
+    """The exponents that neutralise the prefactor x^(1-alpha) (1-x)^beta
+    (alpha=1, beta=0), in preprocessing-layer weight order, read from n3fit's
+    weight *names* so tests do not share the code's even/odd index convention."""
+    from n3fit.backends.keras_backend.MetaModel import PREPROCESSING_LAYER_ALL_REPLICAS
+
+    from ntkpdf.model import get_pdf_model
+
+    names = [v.path.split("/")[-1] for v in
+             get_pdf_model(fit).n3fit_model.get_layer(PREPROCESSING_LAYER_ALL_REPLICAS).weights]
+    assert all(n.startswith(("alpha_", "beta_")) for n in names), names
+    return [1.0 if n.startswith("alpha_") else 0.0 for n in names]
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -104,11 +119,11 @@ def synthetic_fit(request, tmp_path_factory):
             for fl in BASIS_FL
         ]
         (nnfit / f"{name}.json").write_text(
-            json.dumps({"preprocessing": preprocessing, "best_epoch": SYNTHETIC_EPOCHS[-1]})
+            json.dumps({"preprocessing": preprocessing, "best_epoch": SYNTHETIC_BEST_EPOCH})
         )
         params = path / "fit_replicas" / f"replica_{r}" / "parameters"
         params.mkdir(parents=True)
-        for e in SYNTHETIC_EPOCHS:
+        for e in SYNTHETIC_EPOCHS + (SYNTHETIC_BEST_EPOCH,):
             np.savez(params / f"params_{e}.npz", params=rng.normal(scale=0.5, size=N_PARAMS))
 
     return FitSpec(name, path)
