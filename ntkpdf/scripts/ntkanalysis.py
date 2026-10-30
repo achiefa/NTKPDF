@@ -64,6 +64,14 @@ class CompareFitApp(App):
                  "plots (only for closure-test fits).",
         )
         parser.add_argument(
+            '--monitor-memory',
+            dest='monitor_memory',
+            action='store_true',
+            help="Show a live RSS sparkline in the terminal during the run. By "
+                 "default it prints periodic lines to stderr; set NTK_MEM_TTY to a "
+                 "second terminal's device (`tty`) for an isolated in-place line.",
+        )
+        parser.add_argument(
             '-i',
             '--interactive',
             help="Ask interactively for the missing data",
@@ -226,6 +234,20 @@ class CompareFitApp(App):
             c = yaml_safe.load(f)
         c.update(self.complete_mapping())
         return self.config_class(c, environment=self.environment)
+
+    def run(self):
+        # `self.args` is populated by App.init() before run(); start the optional
+        # RSS monitor here so it covers the whole graph-build + execution, and stop
+        # it in `finally` (it is a daemon thread, so this is just a clean shutdown).
+        monitor = None
+        if self.args.get('monitor_memory'):
+            from ntkpdf.memmonitor import start_memory_monitor
+            monitor = start_memory_monitor()
+        try:
+            return super().run()
+        finally:
+            if monitor is not None:
+                monitor.stop()
 
 def main():
     a = CompareFitApp()
