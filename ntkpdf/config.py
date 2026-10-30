@@ -6,15 +6,22 @@ This module contains the configuration and environment classes for the ntkpdf ap
 import json
 import logging
 import numpy as np
+import pandas as pd
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from numbers import Integral
+from pathlib import Path
+
+from numpy.typing import ArrayLike
 
 from colibri.config import colibriConfig
 from colibri.ntk import NTKStats
+from n3fit.backends import MetaModel
 from n3fit.model_gen import generate_pdf_model, ReplicaSettings
 from reportengine.namespaces import NSList
 from reportengine.configparser import ConfigError
+from validphys.core import PDF, FitSpec
+from validphys.pdfgrids import XPlottingGrid
 
 from ntkpdf.utils import BestEpochStat, INPUT_GRID, EVOL_INDEX
 
@@ -25,7 +32,7 @@ NN = frozenset({"exclude_layers":('impose_msr',), "remove_prefactors": True}.ite
 NO_SMR = frozenset({"exclude_layers":('impose_msr')}.items())
 FULL_MODEL = frozenset({})
 
-def layer_kwargs(layers, cumulative=True, base=NN):
+def layer_kwargs(layers: Iterable[int], cumulative: bool = True, base: frozenset = NN) -> frozenset:
     """Build the colibri NTK ``kwargs`` frozenset for a layer-restricted NTK on top of
     a base selector. ``layers`` are 1-based NN (Dense) layer indices. With
     ``cumulative`` the gradient is restricted to layers 1..max(layers) (the cumulative
@@ -36,10 +43,10 @@ def layer_kwargs(layers, cumulative=True, base=NN):
 #----------------------------------------
 # Utilities functions
 #########################################
-def _sort_replicas(replicas):
+def _sort_replicas(replicas: Iterable[Path]) -> list[Path]:
     return sorted(replicas, key=lambda r: int(r.stem.split("_")[-1]))
 
-def _unpack_params(shapes, weights, prepr):
+def _unpack_params(shapes: Sequence[Sequence[int]], weights: np.ndarray, prepr: Sequence[ArrayLike]) -> dict[str, list]:
     """Returns the weight parameters in the format expected by the n3fit model."""
     wight_list = []
     pos = 0
@@ -56,15 +63,21 @@ def _unpack_params(shapes, weights, prepr):
     )
     return params_dict
 
-def _neutral_preprocessing(prepr):
+def _neutral_preprocessing(prepr: Sequence[ArrayLike]) -> list[np.ndarray]:
     """Preprocessing weights are ordered [alpha, beta] per flavour and the
     prefactor x^(1-alpha)*(1-x)^beta is neutralised by alpha=1, beta=0."""
     return [np.full_like(w, 1.0 if j % 2 == 0 else 0.0) for j, w in enumerate(prepr)]
 
-def _has_no_prefactors(model_selector):
+def _has_no_prefactors(model_selector: Mapping | None) -> bool:
     return model_selector is not None and model_selector.get("no_prefactors")
 
-def set_epoch_weights(metamodels, weights, fit_preprocessing, nreplicas, model_selector=None):
+def set_epoch_weights(
+    metamodels: MetaModel,
+    weights: Sequence[np.ndarray],
+    fit_preprocessing: Sequence[Sequence[ArrayLike]],
+    nreplicas: int,
+    model_selector: Mapping | None = None,
+) -> MetaModel:
     """Load one epoch's per-replica ``weights`` (flat vectors) and
     ``fit_preprocessing`` into the shared ``metamodels`` in place, and return it.
     Shared by the per-epoch providers and by the streaming loss loop in
@@ -81,7 +94,7 @@ def set_epoch_weights(metamodels, weights, fit_preprocessing, nreplicas, model_s
         metamodels.set_replica_weights(parameters, idx)
     return metamodels
 
-def predict_pdf_grid(metamodels, input_grid, vetoes=None):
+def predict_pdf_grid(metamodels: MetaModel, input_grid: np.ndarray, vetoes: np.ndarray | None = None) -> NTKStats:
     """Predict the PDF grid from ``metamodels`` and wrap it as ``NTKStats``."""
     pdf_grids = metamodels.predict({"pdf_input": input_grid.T}, verbose=False)[0]
     if vetoes is not None:
@@ -91,7 +104,7 @@ def predict_pdf_grid(metamodels, input_grid, vetoes=None):
     f.set_index(EVOL_INDEX, None)
     return f
 
-def _apply_model_selector(pdf_model, nreplicas, model_selector=None):
+def _apply_model_selector(pdf_model: MetaModel, nreplicas: int, model_selector: Mapping | None = None) -> MetaModel:
     """Set the preprocessing (prefactor) weights of ``pdf_model`` in place
     according to ``model_selector``, and return it.
 
@@ -127,7 +140,7 @@ def _apply_model_selector(pdf_model, nreplicas, model_selector=None):
 class ntkConfig(colibriConfig):
     """Configuration class for ntkpdf, inheriting from colibriConfig."""
 
-    def produce_kwargs(self, name):
+    def produce_kwargs(self, name: str) -> frozenset:
         if name == "model":
             return FULL_MODEL
         elif name == "no_prefactors":
@@ -140,16 +153,16 @@ class ntkConfig(colibriConfig):
             raise ConfigError(f"Unknown model selector name: {name}")
             
 
-    def produce_input_grid(self):
+    def produce_input_grid(self) -> np.ndarray:
         return INPUT_GRID
 
-    def produce_wreplica_paths(self, fit):
+    def produce_wreplica_paths(self, fit: FitSpec) -> NSList:
         """Returns the paths to the weight replicas for the specified fit."""
         path = fit.path / "fit_replicas"
         sorted_replicas = _sort_replicas(path.glob("replica_*"))
         return NSList(sorted_replicas, nskey="wreplica_path")
     
-    def parse_model_selectors(self, model_selectors: list):
+    def parse_model_selectors(self, model_selectors: list) -> list:
         """Global list of model selectors. Each entry is a mapping with a
         ``name`` and the modifier flags (e.g. ``no_prefactors``). This is no
         longer a collect dimension: the per-selector grids are built together in
@@ -157,20 +170,22 @@ class ntkConfig(colibriConfig):
         them by ``name``."""
         return list(model_selectors)
     
-    def produce_replica_paths(self, fit):
+    def produce_replica_paths(self, fit: FitSpec) -> NSList:
         """Returns the paths to the weight replicas for the specified fit."""
         path = fit.path / "nnfit"
         sorted_replicas = _sort_replicas(path.glob("replica_*"))
         return NSList(sorted_replicas, nskey="replica_path")
     
-    def produce_replicas(self, fit):
+    def produce_replicas(self, fit: FitSpec) -> NSList:
         """Returns the list of replica indices for the specified fit."""
         path = fit.path / "nnfit"
         sorted_replicas = _sort_replicas(path.glob("replica_*"))
         replica_indices = [int(r.stem.split("_")[-1]) for r in sorted_replicas]
         return NSList(replica_indices, nskey="replica")
    
-    def produce_nreplicas(self, fit, replica_ids=None, custom_nreplicas=None):
+    def produce_nreplicas(
+        self, fit: FitSpec, replica_ids: Sequence[int] | None = None, custom_nreplicas: int | None = None
+    ) -> int:
         """Returns the number of replicas for the specified fit."""
         if custom_nreplicas is not None:
             return custom_nreplicas
@@ -184,7 +199,9 @@ class ntkConfig(colibriConfig):
             return nreplicas
         return fit_nreplicas
     
-    def produce_fit_weights(self, fit, epoch, replica_ids=None):
+    def produce_fit_weights(
+        self, fit: FitSpec, epoch: int | Iterable[int], replica_ids: Sequence[int] | None = None
+    ) -> list[np.ndarray]:
         """Load the fit weights for the given fit and epoch(s), in the format
         expected by the n3fit model. ``epoch`` is either a single int (broadcast
         to all replicas) or one int per replica."""
@@ -212,7 +229,7 @@ class ntkConfig(colibriConfig):
             for rf, e in zip(rf_paths, epoch_by_rep)
         ]
 
-    def produce_fit_preprocessing(self, fit, replica_ids=None):
+    def produce_fit_preprocessing(self, fit: FitSpec, replica_ids: Sequence[int] | None = None) -> list[list[float]]:
         parameters = []
 
         # Get weight parameters
@@ -233,7 +250,7 @@ class ntkConfig(colibriConfig):
           parameters.append(prepr_weights)
         return parameters
 
-    def produce_best_epochs(self, fit):
+    def produce_best_epochs(self, fit: FitSpec) -> BestEpochStat:
         """Get the distribution of best epochs across replicas for a given fit"""
         fitpath = fit.path
         fit_replicas = fitpath / "nnfit"
@@ -252,7 +269,7 @@ class ntkConfig(colibriConfig):
         stopping_points_stat = BestEpochStat(np.array(best_epochs).reshape(-1, 1))
         return stopping_points_stat
     
-    def produce_stored_epochs(self, fit, best_epochs):
+    def produce_stored_epochs(self, fit: FitSpec, best_epochs: BestEpochStat) -> NSList:
         """
         Get the list of stored epochs for a given fit, excluding the best epoch.
         """
@@ -273,7 +290,7 @@ class ntkConfig(colibriConfig):
         epochs_sorted = sorted(epochs)
         return NSList(epochs_sorted, nskey="epoch")
     
-    def produce_epochs(self, stored_epochs, custom_epochs=None):
+    def produce_epochs(self, stored_epochs: NSList, custom_epochs: Sequence[int] | None = None) -> NSList:
         """
         Get the list of epochs to evaluate, either from the stored epochs or from a custom list provided by the user.
         """
@@ -281,7 +298,7 @@ class ntkConfig(colibriConfig):
             return NSList(custom_epochs, nskey="epoch")
         return stored_epochs
     
-    def produce_model_info(self, fit):
+    def produce_model_info(self, fit: FitSpec) -> dict:
         fit_info = fit.as_input()
         model_dict = {
             "basis_info": fit_info["fitting"]["basis"],
@@ -303,10 +320,10 @@ class ntkConfig(colibriConfig):
         }
         return model_dict
     
-    def produce_learning_rate(self, model_info):
+    def produce_learning_rate(self, model_info: dict) -> float:
         return model_info["learning_rate"]
     
-    def produce_base_metamodels(self, model_info, nreplicas):
+    def produce_base_metamodels(self, model_info: dict, nreplicas: int) -> MetaModel:
         """Build the raw PDF model, with random initialisation and the fit's
         original (with-prefactor) preprocessing.
 
@@ -362,7 +379,9 @@ class ntkConfig(colibriConfig):
         ]
         return pdf_model
 
-    def produce_metamodels(self, base_metamodels, nreplicas, model_selector=None):
+    def produce_metamodels(
+        self, base_metamodels: MetaModel, nreplicas: int, model_selector: Mapping | None = None
+    ) -> MetaModel:
         """Return the raw PDF model with its preprocessing set according to
         ``model_selector`` (see :func:`_apply_model_selector`). The expensive
         replica networks come from :meth:`produce_base_metamodels`; only the
@@ -370,7 +389,9 @@ class ntkConfig(colibriConfig):
         """
         return _apply_model_selector(base_metamodels, nreplicas, model_selector)
 
-    def produce_init_grids_by_name(self, base_metamodels, nreplicas, model_selectors):
+    def produce_init_grids_by_name(
+        self, base_metamodels: MetaModel, nreplicas: int, model_selectors: Sequence[Mapping]
+    ) -> dict[str, XPlottingGrid]:
         """Build the PDF plotting grids at initialisation for every model
         selector, once, and return a ``{selector_name: XPlottingGrid}`` mapping.
 
@@ -406,11 +427,19 @@ class ntkConfig(colibriConfig):
             )
         return grids
     
-    def produce_pdf_at_init(self, metamodels, input_grid):
+    def produce_pdf_at_init(self, metamodels: MetaModel, input_grid: np.ndarray) -> NTKStats:
         """Return the model at initialisation in the NTKStats format."""
         return predict_pdf_grid(metamodels, input_grid)
     
-    def produce_model_at_epoch(self, fit_weights, fit_preprocessing, metamodels, nreplicas, model_selector=None, vetoname=None):
+    def produce_model_at_epoch(
+        self,
+        fit_weights: Sequence[np.ndarray],
+        fit_preprocessing: Sequence[Sequence[ArrayLike]],
+        metamodels: MetaModel,
+        nreplicas: int,
+        model_selector: Mapping | None = None,
+        vetoname: str | None = None,
+    ) -> tuple[MetaModel, np.ndarray]:
         """Get the PDF model at the specified epoch, with the corresponding weights."""
         pdf_models = set_epoch_weights(metamodels, fit_weights, fit_preprocessing, nreplicas, model_selector)
 
@@ -422,11 +451,11 @@ class ntkConfig(colibriConfig):
 
         return pdf_models, vetoes
 
-    def produce_pdf_at_epoch(self, model_at_epoch, input_grid):
+    def produce_pdf_at_epoch(self, model_at_epoch: tuple[MetaModel, np.ndarray], input_grid: np.ndarray) -> NTKStats:
         pdf_models, vetoes = model_at_epoch
         return predict_pdf_grid(pdf_models, input_grid, vetoes=vetoes)
 
-    def produce_pdf_grid_at_epoch(self, model_at_epoch):
+    def produce_pdf_grid_at_epoch(self, model_at_epoch: tuple[MetaModel, np.ndarray]) -> XPlottingGrid:
         """PDF plotting grid (``XPlottingGrid``) for the model at a given epoch.
 
         This is a *production*, not a plain provider, and that is load-bearing.
@@ -455,7 +484,7 @@ class ntkConfig(colibriConfig):
             N3PDF(pdf_models.split_replicas()), 1.65, XGRID, "evolution", EVOL_LIST
         )
 
-    def produce_fakepdf(self, fit):
+    def produce_fakepdf(self, fit: FitSpec) -> PDF:
         """The closure-test underlying-law PDF (``closuretest: fakepdf``) of the
         fit, parsed into a validphys PDF. Mirrors the notebook's
         ``fit.as_input()['closuretest']['fakepdf']``; raises if the fit is not a
@@ -469,7 +498,7 @@ class ntkConfig(colibriConfig):
             ) from e
         return self.parse_pdf(name)
 
-    def produce_fakepdf_grid(self, fit, show_fakepdf=False):
+    def produce_fakepdf_grid(self, fit: FitSpec, show_fakepdf: bool = False) -> XPlottingGrid | None:
         """Plotting grid for the closure-test underlying-law PDF, or ``None`` when
         the user did not opt in via ``show_fakepdf``.
 
@@ -489,7 +518,9 @@ class ntkConfig(colibriConfig):
         fakepdf = self.produce_fakepdf(fit)
         return xplotting_grid(fakepdf, 1.65, XGRID, "evolution", EVOL_LIST)
 
-    def produce_fitting_covmat_eigensystem(self, fit, fitting_covmat_name):
+    def produce_fitting_covmat_eigensystem(
+        self, fit: FitSpec, fitting_covmat_name: Path
+    ) -> tuple[np.ndarray, pd.DataFrame]:
         """Eigendecomposition of the fitting covariance matrix, loaded **once**.
 
         This is a *production* (not a plain provider) on purpose: the eigenvector
@@ -512,8 +543,6 @@ class ntkConfig(colibriConfig):
                 f"Fit {fit.name} was not run with diagonal_basis=True; "
                 "fitting_covmat_eigensystem expects a diagonal-basis fit."
             )
-        import pandas as pd
-
         eigensystem = pd.read_csv(
             fitting_covmat_name, index_col=[0], header=[0], sep="\t|,", engine="python",
         )
@@ -521,7 +550,9 @@ class ntkConfig(colibriConfig):
         eigvecs = eigensystem.iloc[:, 1:]
         return eigvals, eigvecs
 
-    def produce_ntk_fast_kernel_arrays(self, fit, padding=True, flavour_basis=False):
+    def produce_ntk_fast_kernel_arrays(
+        self, fit: FitSpec, padding: bool = True, flavour_basis: bool = False
+    ) -> pd.DataFrame:
         """FK tables for the fit's data, built **once** as a production, anchored to ``fit``.
 
         A production (not a provider) for the same reason as
