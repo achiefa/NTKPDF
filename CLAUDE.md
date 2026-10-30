@@ -148,8 +148,8 @@ ntkanalysis -i        # interactive: prompts for fit/title/author/keywords
 #   --formats pdf           figure formats (default png+pdf; this avoids the PNGs)
 ```
 
-There is no test suite in the repo yet (the `test` extra wires up `pytest`/`hypothesis`).
-Do not invent test commands.
+Tests live in `ntkpdf/tests/`. `pytest -m "not fit"` runs the fast ones; plain `pytest` also runs
+the `fit`-marked end-to-end tests, which download the test fit (`conftest.FIT`) on demand.
 
 `ntkpdf/scripts/260526-ac-02-ntk-sgd/` is a captured example run (input runcard, figures,
 tables, `meta.yaml`) — a good reference for what a completed report looks like.
@@ -188,8 +188,11 @@ fit/nreplicas, and snapshots its preprocessing into `_ntk_base_preprocessing`) �
 sets alpha=1/beta=0 — so selectors share one expensive build) → `produce_model_at_epoch`
 (loads a saved epoch's weights via `set_epoch_weights`/`_unpack_params`) →
 `produce_pdf_at_epoch` (predicts on the x-grid and wraps the result in `NTKStats`, via
-`predict_pdf_grid`). `produce_init_grids_by_name` builds the per-selector PDF grids at
-initialisation in one shared production.
+`predict_pdf_grid`). Loading weights also rewrites the preprocessing layer, so
+`set_epoch_weights` takes `model_selector` and re-applies `no_prefactors` itself; every
+weight-loading call site must pass it through, or the selector is silently dropped.
+`produce_init_grids_by_name` builds the per-selector PDF grids at initialisation in one
+shared production.
 
 The base model is mutated in place and reused; this is safe under reportengine's sequential
 execution because each grid is materialised to NumPy before the next mutation.
@@ -263,7 +266,7 @@ metric `M = (V·FK)ᵀ diag(1/Λ) (V·FK)` exactly as used during the fit.
 
 Two orderings coexist and are a frequent source of bugs:
 
-- **n3fit model output order** = `EVOL_LIST` (`photon, sigma, g, V, T3, …`).
+- **n3fit model output order** = `EVOL_LIST` (`photon, sigma, gluon, V, V3, V8, V15, V24, V35, T3, T8, T15, T24, T35`).
 - **validphys "evolution" basis order** (`sigma, V, T3, …, g, photon`).
 - **flavour basis** = `EXPORT_LABELS` (`tbar … gluon … t, photon`).
 
