@@ -6,7 +6,7 @@ import os
 os.environ.setdefault("KERAS_BACKEND", "jax")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 # NB: double precision is configured at model-build time, not here. colibri's
-# ``Environment`` enables ``jax_enable_x64`` and ``produce_base_metamodels`` sets
+# ``Environment`` enables ``jax_enable_x64`` and ``N3FitEnsemble`` sets
 # keras ``floatx`` to float64 just before building the model. Toggling JAX state
 # at import (before jax initialises) proved fragile, so it is deliberately done
 # lazily, once colibri has set up the backend.

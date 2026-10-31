@@ -28,22 +28,62 @@ def ntk_fit():
     return FallbackLoader().check_fit(FIT)
 
 
-@pytest.fixture
-def clean_eigenvalue_cache(ntk_fit):
-    """Delete any ``ntk_eigenvalues_*`` cache files created during a test.
+# A small colibri_msht fit (FPPDF perturbative charm, no sum rules): 2 replicas, 10
+# epochs, every epoch saved. Run once into the NNPDF results folder, like the
+# downloaded n3fit fit; needs colibri_msht (with FixedParamModel) importable.
+COLIBRI_FIT = "ntkpdf_test_colibri_msht"
+COLIBRI_REPLICAS = (1, 2)
+COLIBRI_EPOCHS = 10
+
+
+@pytest.fixture(scope="session")
+def colibri_fit(tmp_path_factory):
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    import colibri_msht
+    from validphys.loader import FallbackLoader
+
+    loader = FallbackLoader()
+    if not (loader.resultspath / COLIBRI_FIT).exists():
+        source = Path(colibri_msht.__file__).parent / "runcards/fppdf_perturbative_charm_nosr_mc.yaml"
+        runcard = {**yaml.safe_load(source.read_text()), "max_epochs": COLIBRI_EPOCHS, "record_every": 1}
+        tmp = tmp_path_factory.mktemp("colibri")
+        (tmp / f"{COLIBRI_FIT}.yaml").write_text(yaml.safe_dump(runcard, sort_keys=False))
+        for r in COLIBRI_REPLICAS:
+            subprocess.run(
+                [sys.executable, "-m", "colibri_msht.app", f"{COLIBRI_FIT}.yaml", "-rep", str(r)],
+                cwd=tmp, check=True,
+            )
+        shutil.move(tmp / COLIBRI_FIT, loader.resultspath / COLIBRI_FIT)
+    return loader.check_fit(COLIBRI_FIT)
+
+
+def _remove_new_eigenvalue_caches(fit):
+    """Yield, then delete the ``ntk_eigenvalues_*`` cache files created meanwhile.
 
     The eigenvalue providers serialise into ``<fit>/fit_replicas/replica_*/``
     (see colibri's ``produce_replicas_path``), i.e. *inside* the fit directory.
-    This fixture snapshots the cache files present before the test and removes
-    any that appear during it, so the (possibly shared, downloaded) fit is left
-    untouched.
+    This snapshots the cache files present before the test and removes any that
+    appear during it, so the (possibly shared, downloaded) fit is left untouched.
     """
-    replicas_dir = ntk_fit.path / "fit_replicas"
+    replicas_dir = fit.path / "fit_replicas"
     pattern = "replica_*/ntk_eigenvalues_*.npz"
     before = set(replicas_dir.glob(pattern))
     yield
     for created in set(replicas_dir.glob(pattern)) - before:
         created.unlink()
+
+
+@pytest.fixture
+def clean_eigenvalue_cache(ntk_fit):
+    yield from _remove_new_eigenvalue_caches(ntk_fit)
+
+
+@pytest.fixture
+def clean_colibri_eigenvalue_cache(colibri_fit):
+    yield from _remove_new_eigenvalue_caches(colibri_fit)
 
 
 # A tiny on-disk n3fit fit, written to a tmp dir: enough of the layout (filter.yml,
@@ -130,12 +170,11 @@ def synthetic_fit(request, tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
-def metamodels(synthetic_fit):
-    """The keras (PDF-grid path) multi-replica model for ``synthetic_fit``."""
-    from ntkpdf.config import ntkConfig
+def ensemble(synthetic_fit):
+    """The keras (PDF-grid path) multi-replica network for ``synthetic_fit``."""
+    from ntkpdf.fits.n3fit import N3Fit
 
-    config = ntkConfig({})
-    return config.produce_base_metamodels(config.produce_model_info(synthetic_fit), SYNTHETIC_NREPLICAS)
+    return N3Fit(synthetic_fit).ensemble(SYNTHETIC_NREPLICAS)
 
 
 def pytest_runtest_setup(item):

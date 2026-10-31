@@ -17,10 +17,8 @@ from colibri.constants import EXPORT_LABELS, XGRID
 from n3fit.layers.DIS import DIS
 from n3fit.layers.observable import compute_float_mask
 from reportengine import collect
-from validphys.pseudodata import read_replica_pseudodata
 from validphys.results import data_index
 
-from ntkpdf.config import set_epoch_weights, predict_pdf_grid
 from ntkpdf.utils import (
   flav_to_evol_matrix,
   IDX_TO_FKFLAV,
@@ -32,20 +30,6 @@ from ntkpdf.utils import (
 log = logging.getLogger(__name__)
 
 FK_INDEX = EVOL_INDEX
-
-#---------------------------------------------------------------
-# Utilities not meant to be exposed as providers
-##################################################################
-def _sorted_eigenmode_index(idx: pd.Index) -> pd.Index:
-    """Sort a flat ``"eigenmode k"``/``"data k"`` index ascending by ``k``."""
-    return pd.Index(sorted(idx, key=lambda s: int(s.split()[-1])))
-
-def _data_idx(n: int) -> pd.MultiIndex:
-    """``data_idx``-named MultiIndex 1..n. Matches the convention used in
-    ``cross_validation.ipynb`` so chained ``@`` between FK and Cinv has
-    consistent row/column indices."""
-    return pd.MultiIndex.from_arrays([[i + 1 for i in range(n)]], names=["data_idx"])
-
 
 #---------------------------------------------------------------
 # Utility classes 
@@ -134,8 +118,7 @@ def _build_ntk_fast_kernel_arrays(data, padding=True, flavour_basis=False) -> pd
     a validphys *production* (``produce_data``) available in every namespace, so a
     *provider* depending on it resolves to a separate node per presentation leaf
     (~200x) -> reloaded + retained -> OOM. As a production this FK is evaluated once at
-    graph-build (like ``fitting_covmat_eigensystem``); ``fk``/``m_matrix`` then anchor
-    to the shallow ``train_val_masks`` node and collapse to a handful.
+    graph-build, and so is ``training_data``, which is built from it.
 
     The per-dataset ``(dataset, id)`` row index uses validphys's ``data_index(data)``
     (dropping its top ``experiment`` level) rather than the ``groups_index`` provider:
@@ -206,240 +189,32 @@ def _build_ntk_fast_kernel_arrays(data, padding=True, flavour_basis=False) -> pd
     return FK_df
 
 
-def fit_pseudodata(fit):
-    """Per-replica fit pseudodata, read **once**, by looping the single-replica reader.
+def get_train_val_data(training_data):
+    """Per-replica training and validation pseudodata, rows labelled ``data_idx``."""
+    return training_data.y
 
-    Build-once replacement for depending on validphys's ``read_fit_pseudodata``,
-    which is a reportengine ``collect`` (``collect('read_replica_pseudodata',
-    ('fitreplicas', 'fitcontextwithcuts'))``). A ``collect`` is *re-made at every
-    request site*, so every provider that consumed it inherited that: the whole
-    metric chain -- ``train_val_masks`` -> ``fk_diagonal_basis_train_val`` /
-    ``cinv_diagonal_basis_train_val`` -> ``m_matrix_train_val``, and (via the
-    ``context_index`` collect that ``read_replica_pseudodata`` pulls in)
-    ``ntk_fast_kernel_arrays`` -- became a *separate DAG node per presentation leaf*
-    (~200x on the full report), each one reloading and *retaining* the pseudodata.
-    Since nothing is freed, that was the OOM.
 
-    By importing the single-replica ``read_replica_pseudodata`` and looping here, this
-    provider has **no collect in its subtree** and depends only on ``fit`` (a genuine
-    per-fit constant). reportengine therefore resolves it (and everything downstream)
-    to a *single shared node*, collapsing the chain to 1 node each. Verify with a DAG
-    node-count: ``m_matrix_train_val`` should drop from ~200 to 1.
+def fk_train_val(training_data):
+    """Per-replica training and validation FK tables, in the basis the fit used (n3fit:
+    the covmat's eigenbasis; colibri: the data points), rows labelled ``data_idx``."""
+    return training_data.fk
 
-    Returns the same ``list[DataTrValSpec]`` as ``read_fit_pseudodata`` (one entry per
-    replica). ``context_index`` is only read by ``read_replica_pseudodata`` in the
-    legacy ``diagonal_basis=False`` branch -- which this metric chain does not support
-    (the consumers raise) -- so we pass ``None`` and guard here for a clear error.
+
+def cinv_train_val(training_data):
+    """Per-replica inverse covmat of the training and validation losses: diagonal for
+    an n3fit fit (eigenbasis), dense for a colibri fit."""
+    return training_data.cinv
+
+
+def m_matrix_train_val(fk_train_val, cinv_train_val):
     """
-    if not fit.as_input().get("diagonal_basis", True):
-        raise ValueError(
-            f"Fit {fit.name} was not run with diagonal_basis=True; "
-            "fit_pseudodata expects a diagonal-basis fit."
-        )
-    # Postfit replica directories under nnfit/ (replica_1, replica_2, ...), in order.
-    replica_dirs = sorted(
-        (p for p in (fit.path / "nnfit").glob("replica_*") if p.is_dir()),
-        key=lambda p: int(p.name.split("_")[1]),
-    )
-    replicas = [int(p.name.split("_")[1]) for p in replica_dirs]
-    return [read_replica_pseudodata(fit, None, replica) for replica in replicas]
-
-
-def get_fit_pseudodata(fit, fit_pseudodata, groups_index, psd_type="all"):
-    """
-    Get the pseudodata for a given fit name using the NTK stats. Returns an
-    :class:`NTKStats` of one-column DataFrames, one per replica.
-
-    Handles both fitting conventions:
-
-    * ``diagonal_basis=True`` (modern default): the saved pseudodata is in the
-      diagonalised covmat basis, indexed by flat ``"eigenmode k"`` strings;
-      it is reindexed in ascending ``k`` so the ordering matches
-      :func:`fitting_covmat_eigensystem`.
-    * ``diagonal_basis=False`` (legacy): the saved pseudodata has the
-      ``(group, dataset, id)`` MultiIndex; it is reindexed against
-      ``groups_index`` so the ordering matches :func:`ntk_fast_kernel_arrays`.
-
-    ``psd_type`` is one of ``"all"``, ``"train"``, ``"val"``.
-    """
-    pseudo_data = fit_pseudodata
-    diagonal = fit.as_input().get("diagonal_basis", True)
-
-    if not diagonal:
-        groups_index_nogroup = groups_index.droplevel("group")
-
-    raw_data = []
-    for pdr in pseudo_data:
-        if diagonal:
-            data = pdr.pseudodata.reindex(_sorted_eigenmode_index(pdr.pseudodata.index))
-        else:
-            data = pdr.pseudodata.droplevel("group").loc[groups_index_nogroup]
-        data.columns = data.columns.str.replace(r'\s+\d+$', '', regex=True)
-
-        if psd_type == "all":
-            idx_selector = data.index
-        elif psd_type == "train":
-            idx_selector = pdr.tr_idx if diagonal else pdr.tr_idx.droplevel("group")
-        elif psd_type == "val":
-            idx_selector = pdr.val_idx if diagonal else pdr.val_idx.droplevel("group")
-        else:
-            raise ValueError(f"Invalid psd_type: {psd_type}. Must be one of 'all', 'train', or 'val'.")
-
-        raw_data.append(data.loc[idx_selector])
-
-    return NTKStats(raw_data)
-
-
-def train_val_masks(fit, fit_pseudodata):
-    """
-    Per-replica boolean train and validation masks, aligned with the full
-    eigenmode-sorted pseudodata index.
-
-    Each mask is a single-column DataFrame of length ``Ndata`` with ``True``
-    on the points belonging to the corresponding subset. Wrapped in
-    :class:`NTKStats` so all replicas stack into a ``(Nrep, Ndata, 1)`` array.
-
-    Returns
-    -------
-    tr_masks, val_masks : NTKStats
-    """
-    is_diagonal = fit.as_input().get("diagonal_basis", True)
-    if not is_diagonal:
-        raise ValueError(
-            f"Fit {fit.name} was not run with diagonal_basis=True; "
-            "train_val_masks expects a diagonal-basis fit."
-        )
-    pseudo_data = fit_pseudodata
-
-    tr_frames, val_frames = [], []
-    for pdr in pseudo_data:
-        # Training and validation indices are stacked and therefore
-        # the eigenmode index is not ordered by the original data index.
-        data_index = _sorted_eigenmode_index(pdr.pseudodata.index)
-        tr_mask = data_index.isin(pdr.tr_idx)
-        val_mask = ~tr_mask
-        tr_frames.append(pd.DataFrame(tr_mask, index=data_index))
-        val_frames.append(pd.DataFrame(val_mask, index=data_index))
-
-    return NTKStats(tr_frames), NTKStats(val_frames)
-
-
-def get_train_val_data(fit, fit_pseudodata):
-    is_diagonal = fit.as_input().get("diagonal_basis", True)
-    if not is_diagonal:
-        raise ValueError(
-            f"Fit {fit.name} was not run with diagonal_basis=True; "
-            "train_val_masks expects a diagonal-basis fit."
-        )
-    pseudo_data = fit_pseudodata
-    tr_data_list, val_data_list = [], []
-    for pdr in pseudo_data:
-        data = pdr.pseudodata.reindex(
-            sorted(pdr.pseudodata.index, key=lambda s: int(s.split()[-1]))
-        )
-        data.columns = data.columns.str.replace(r'\s+\d+$', '', regex=True)
-        tr_data_list.append(data.loc[pdr.tr_idx])
-        val_data_list.append(data.loc[~data.index.isin(pdr.tr_idx)])
-    
-    tr_data = NTKStats(tr_data_list)
-    val_data = NTKStats(val_data_list)
-    tr_data.set_index(_data_idx(tr_data.shape[0]), tr_data._df_columns)
-    val_data.set_index(_data_idx(val_data.shape[0]), val_data._df_columns)
-    return tr_data, val_data
-
-
-def fk_diagonal_basis_train_val(fitting_covmat_eigensystem, 
-                                ntk_fast_kernel_arrays,
-                                train_val_masks):
-    """
-    Per-replica FK rotated into the diagonal covmat basis and split by
-    train/val using each replica's mask.
-
-    For each replica r,
-
-    .. code-block:: text
-
-        FK_diag = eigvecs @ FK
-        fk_tr[r] = FK_diag[tr_mask[r]]
-        fk_vl[r] = FK_diag[val_mask[r]]
-
-    The data-axis index is then reset to a plain integer ``data_idx`` so that
-    the chained product with :func:`cinv_diagonal_basis_train_val` is
-    consistent (FK rows carry eigenmode labels, Cinv is built from
-    ``np.diag`` and has no labels, and ``NTKStats.__matmul__`` requires the
-    inner indices to match).
-
-    Returns
-    -------
-    fk_tr, fk_vl : NTKStats
-        Replica-wise (Ntr, n_params) and (Nval, n_params) blocks. The
-        parameter axis carries the FK column index.
-    """
-    _, eigvecs = fitting_covmat_eigensystem
-    FK = ntk_fast_kernel_arrays
-    # Align eigenvector columns to the FK index so the matmul rotates FK into the
-    # diagonal covmat basis. Done here (not in the production that loads the
-    # eigensystem) because the FK index needs the ntk_fast_kernel_arrays provider;
-    # this is an in-place, idempotent relabel of the shared (per-fit) eigvecs.
-    eigvecs.columns = ntk_fast_kernel_arrays.index
-    FK_diag = eigvecs @ FK
-    tr_masks, val_masks = train_val_masks
-
-    fk_tr_frames, fk_vl_frames = [], []
-    for tr_m, vl_m in zip(tr_masks.frames, val_masks.frames):
-        fk_tr_frames.append(FK_diag[tr_m.iloc[:, 0]])
-        fk_vl_frames.append(FK_diag[vl_m.iloc[:, 0]])
-    fk_tr = NTKStats(fk_tr_frames)
-    fk_vl = NTKStats(fk_vl_frames)
-    fk_tr.set_index(_data_idx(fk_tr.shape[0]), fk_tr._df_columns)
-    fk_vl.set_index(_data_idx(fk_vl.shape[0]), fk_vl._df_columns)
-    return fk_tr, fk_vl
-
-
-def cinv_diagonal_basis_train_val(fitting_covmat_eigensystem, train_val_masks):
-    """
-    Per-replica diagonal :math:`C^{-1}` in the diagonal covmat basis,
-    restricted to each replica's train and validation eigenmodes.
-
-    In the diagonal basis the covariance is :math:`C = \\mathrm{diag}(\\Lambda)`,
-    so the restriction is also diagonal: ``Cinv_tr[r] = diag(1/eigvals[tr_mask[r]])``.
-    Row/column indices are set to ``data_idx`` so the result chains with
-    :func:`fk_diagonal_basis_train_val`.
-
-    Returns
-    -------
-    cinv_tr, cinv_vl : NTKStats
-        ``(Ntr, Ntr)`` and ``(Nval, Nval)`` diagonal matrices per replica.
-    """
-    eigvals, _ = fitting_covmat_eigensystem
-    tr_masks, val_masks = train_val_masks
-
-    cinv_tr_frames, cinv_vl_frames = [], []
-    for tr_m, vl_m in zip(tr_masks.frames, val_masks.frames):
-        tr_vals = 1.0 / eigvals[tr_m.iloc[:, 0].values]
-        vl_vals = 1.0 / eigvals[vl_m.iloc[:, 0].values]
-        cinv_tr_frames.append(pd.DataFrame(np.diag(tr_vals)))
-        cinv_vl_frames.append(pd.DataFrame(np.diag(vl_vals)))
-    cinv_tr = NTKStats(cinv_tr_frames)
-    cinv_vl = NTKStats(cinv_vl_frames)
-    tr_idx = _data_idx(cinv_tr.shape[0])
-    vl_idx = _data_idx(cinv_vl.shape[0])
-    cinv_tr.set_index(tr_idx, tr_idx)
-    cinv_vl.set_index(vl_idx, vl_idx)
-    return cinv_tr, cinv_vl
-
-
-def m_matrix_train_val(fk_diagonal_basis_train_val, cinv_diagonal_basis_train_val):
-    """
-    Per-replica training and validation metric matrices in the diagonal-basis
-    convention used during the fit:
+    Per-replica training and validation metric matrices of the fit's loss,
 
     .. math::
 
-        M_{\\mathrm{tr}}[r] = (V_{\\mathrm{tr}} FK)^{T}\\,\\mathrm{diag}\\!\\bigl(1/\\Lambda_{\\mathrm{tr}}[r]\\bigr)\\,(V_{\\mathrm{tr}} FK),
+        M_{\\mathrm{tr}}[r] = FK_{\\mathrm{tr}}[r]^{T}\\, C^{-1}_{\\mathrm{tr}}[r]\\, FK_{\\mathrm{tr}}[r],
 
-    and similarly for validation. ``V`` is the orthonormal eigenbasis of the
-    fitting covmat and the subscript selects rows by replica ``r``'s mask.
+    and similarly for validation.
 
     Returns
     -------
@@ -447,8 +222,8 @@ def m_matrix_train_val(fk_diagonal_basis_train_val, cinv_diagonal_basis_train_va
         ``(n_params, n_params)`` matrices per replica with the FK column index
         on both axes.
     """
-    fk_tr, fk_vl = fk_diagonal_basis_train_val
-    cinv_tr, cinv_vl = cinv_diagonal_basis_train_val
+    fk_tr, fk_vl = fk_train_val
+    cinv_tr, cinv_vl = cinv_train_val
     M_tr = fk_tr.T @ cinv_tr @ fk_tr
     M_vl = fk_vl.T @ cinv_vl @ fk_vl
     return M_tr, M_vl
@@ -458,16 +233,13 @@ def loss_function_grid(fit,
                        stored_epochs,
                        nreplicas,
                        wreplica_paths,
-                       fit_preprocessing,
-                       metamodels,
-                       input_grid,
-                       cinv_diagonal_basis_train_val,
-                       fk_diagonal_basis_train_val,
-                       get_train_val_data,
+                       pdf_ensemble,
+                       training_data,
                        model_selector=None):
     """
     Build :class:`LossGrid` classes for the training and validation loss
-    functions of a fit over ``stored_epochs``.
+    functions of a fit over ``stored_epochs``. The validation one is ``None`` when the
+    fit has no validation data.
 
     The epochs are streamed in a plain Python loop rather than collected over an
     ``epochs`` namespace. reportengine retains every node/production result for
@@ -477,9 +249,9 @@ def loss_function_grid(fit,
     only the current epoch's grid is alive at a time; only the small per-epoch
     losses persist. Memory is O(grid) instead of O(n_epochs * grid).
     """
-    fk_tr, fk_vl = fk_diagonal_basis_train_val
-    cinv_tr, cinv_vl = cinv_diagonal_basis_train_val
-    tr_data, vl_data = get_train_val_data
+    fk_tr, fk_vl = training_data.fk
+    cinv_tr, cinv_vl = training_data.cinv
+    tr_data, vl_data = training_data.y
     ndata_tr = tr_data.shape[0]
     ndata_vl = vl_data.shape[0]
 
@@ -494,26 +266,25 @@ def loss_function_grid(fit,
         if i % 25 == 0 or i == n_ep - 1:
             log.info("[loss-grid] epoch %d/%d (epoch=%s) | peak RSS %.1f GB",
                      i + 1, n_ep, epoch, peak_rss_gb())
-        # wreplica_paths and fit_preprocessing are both sorted by replica index,
-        # so index idx refers to the same replica in each.
+        # wreplica_paths and the ensemble's replicas are both sorted by replica
+        # index, so index idx refers to the same replica in each.
         weights = [
             np.load(wreplica_paths[idx] / "parameters" / f"params_{epoch}.npz")["params"]
             for idx in range(nreplicas)
         ]
-        set_epoch_weights(metamodels, weights, fit_preprocessing, nreplicas, model_selector)
-        f = predict_pdf_grid(metamodels, input_grid)
+        f = pdf_ensemble.at(weights, model_selector)
 
         res_tr = tr_data - fk_tr @ f
-        res_vl = vl_data - fk_vl @ f
-        loss_tr = (res_tr.T @ cinv_tr @ res_tr).data.reshape(-1, 1) / ndata_tr
-        loss_vl = (res_vl.T @ cinv_vl @ res_vl).data.reshape(-1, 1) / ndata_vl
-
-        tr_loss_stats[epoch] = NTKStats(loss_tr)
-        vl_loss_stats[epoch] = NTKStats(loss_vl)
+        tr_loss_stats[epoch] = NTKStats((res_tr.T @ cinv_tr @ res_tr).data.reshape(-1, 1) / ndata_tr)
+        if ndata_vl:
+            res_vl = vl_data - fk_vl @ f
+            vl_loss_stats[epoch] = NTKStats((res_vl.T @ cinv_vl @ res_vl).data.reshape(-1, 1) / ndata_vl)
         # `f` and the predicted grid for this epoch are released next iteration.
 
     tr_loss_grid = LossGrid(label=fit.label, epochs=stored_epochs, loss_stats=tr_loss_stats, training=True)
-    vl_loss_grid = LossGrid(label=fit.label, epochs=stored_epochs, loss_stats=vl_loss_stats, training=False)
+    vl_loss_grid = None
+    if ndata_vl:
+        vl_loss_grid = LossGrid(label=fit.label, epochs=stored_epochs, loss_stats=vl_loss_stats, training=False)
     return tr_loss_grid, vl_loss_grid
 
 loss_function_grid_by_fit = collect("loss_function_grid", ("fits",))

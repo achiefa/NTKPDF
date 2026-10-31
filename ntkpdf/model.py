@@ -18,13 +18,12 @@ Two halves:
 - :func:`get_pdf_model` / :func:`install` -- a drop-in replacement for
   ``colibri.utils.get_pdf_model``, rebound over colibri's at import time (see
   :func:`install`). colibri's version loads ``pdf_model.pkl`` and hardcodes
-  ``from colibri_n3fit.model import N3FitPDFModel``; ours reads the fit's own
-  ``filter.yml`` instead, so no pickle is involved and ``colibri_n3fit`` is never
-  imported.
+  ``from colibri_n3fit.model import N3FitPDFModel``; ours asks the fit's reader
+  (:mod:`ntkpdf.fits`): an n3fit network is rebuilt from the fit's own ``filter.yml``,
+  so ``colibri_n3fit`` is never imported, and a colibri model is unpickled.
 """
 
 import importlib
-import json
 import logging
 import math
 
@@ -129,7 +128,7 @@ class NTKPDFN3Fit(PDFModel):
 
         # Done here (at build time) rather than at import: toggling JAX state before it
         # initialises proved fragile, see the note in ``ntkpdf/__init__.py``. float64
-        # keeps this in step with ``ntkConfig.produce_base_metamodels``, so the two
+        # keeps this in step with ``ntkpdf.fits.n3fit.N3FitEnsemble``, so the two
         # model-build paths agree to the last bit.
         import keras
 
@@ -322,82 +321,21 @@ def _resolve_fit(colibri_fit):
     return FallbackLoader().check_fit(str(colibri_fit))
 
 
-def _model_init_args(fit_input):
-    """:class:`NTKPDFN3Fit` constructor arguments read from a fit's ``filter.yml``
-    (i.e. ``FitSpec.as_input()``).
-
-    Same field set that n3fit bakes into ``pdf_model.pkl`` at
-    ``model_trainer.py``'s ``_init_args``, read from the runcard instead. Compare
-    ``ntkConfig.produce_model_info``, which maps the same runcard keys for the PDF-grid
-    path (and additionally reads the optimiser and initialiser settings, which only
-    matter for a *freshly initialised* network).
-    """
-    parameters = fit_input["parameters"]
-    return {
-        "nnseed": fit_input["nnseed"],
-        "flav_info": fit_input["fitting"]["basis"],
-        "fitbasis": fit_input["fitting"]["fitbasis"],
-        "nodes": parameters["nodes_per_layer"],
-        "activations": parameters["activation_per_layer"],
-        "initializer_name": parameters["initializer"],
-        "layer_type": parameters["layer_type"],
-        # n3fit's ``performfit`` defaults ``sum_rules`` to True; the trainer passes it
-        # straight through to the model as ``impose_sumrule``.
-        "impose_sumrule": fit_input.get("sum_rules", True),
-    }
-
-
-def _replica_preprocessing(fit_path, fit_name, replica_idx):
-    """The fitted preprocessing exponents of one replica, as keras weights.
-
-    Read from ``nnfit/replica_<r>/<fit>.json``, ordered ``[smallx, largex]`` per
-    flavour to match the preprocessing layer's weight order.
-    """
-    path = fit_path / f"nnfit/replica_{replica_idx}" / f"{fit_name}.json"
-    with open(path, "r", encoding="utf-8") as f:
-        preprocessing = json.load(f)["preprocessing"]
-
-    weights = []
-    for fl in preprocessing:
-        weights.append(np.array([[fl["smallx"]]]))
-        weights.append(np.array([[fl["largex"]]]))
-    return weights
-
-
 def get_pdf_model(colibri_fit, replica_idx=None):
-    """Given a fit, returns the PDF model. Drop-in for ``colibri.utils.get_pdf_model``.
-
-    Builds :class:`NTKPDFN3Fit` from the fit's ``filter.yml`` -- no ``pdf_model.pkl``
-    and no ``colibri_n3fit`` import. With ``replica_idx`` the network is loaded with
-    that replica's fitted preprocessing exponents; without it the model keeps the
-    exponents it was built with. This matters whenever the prefactors are *kept*
-    (the ``model``/``no_smr`` selectors); ``remove_prefactors`` overrides them anyway.
+    """Given a fit, returns its PDF model. Drop-in for ``colibri.utils.get_pdf_model``,
+    for n3fit and colibri fits alike (see :mod:`ntkpdf.fits`).
 
     Parameters
     ----------
     colibri_fit : str or validphys.core.FitSpec
         The fit to read.
     replica_idx : int, optional
-        1-based replica index whose preprocessing factors should be loaded.
-
-    Returns
-    -------
-    NTKPDFN3Fit
+        1-based replica index; an n3fit network is loaded with that replica's fitted
+        preprocessing exponents. A colibri model is the same for every replica.
     """
-    fit = _resolve_fit(colibri_fit)
+    from ntkpdf.fits import load_fit  # here, since ntkpdf.fits imports this module
 
-    pdf_model = NTKPDFN3Fit(
-        replica_index=1,
-        replica_range_settings={"min_replica": 1, "max_replica": 1},
-        **_model_init_args(fit.as_input()),
-    )
-
-    if replica_idx is not None:
-        pdf_model.n3fit_model.get_layer(PREPROCESSING_LAYER_ALL_REPLICAS).set_weights(
-            _replica_preprocessing(fit.path, fit.name, replica_idx)
-        )
-
-    return pdf_model
+    return load_fit(_resolve_fit(colibri_fit)).pdf_model(replica_idx)
 
 
 def install():

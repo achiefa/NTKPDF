@@ -8,6 +8,7 @@ with the keras PDF-grid path (``ntkpdf.config``), on the tiny synthetic fits fro
 
 import ast
 import importlib
+import json
 from pathlib import Path
 
 import numpy as np
@@ -20,16 +21,14 @@ import jax
 from n3fit.backends.keras_backend.MetaModel import PREPROCESSING_LAYER_ALL_REPLICAS
 
 import ntkpdf.model as model_mod
-from ntkpdf.config import (
-    FULL_MODEL, NN, NO_PREFACTORS, NO_SMR, layer_kwargs, ntkConfig,
-    predict_pdf_grid, set_epoch_weights,
-)
-from ntkpdf.model import _model_init_args, _nn_layer_param_ranges, _replica_preprocessing, get_pdf_model
+from ntkpdf.config import FULL_MODEL, NN, NO_PREFACTORS, NO_SMR, layer_kwargs, ntkConfig
+from ntkpdf.fits.n3fit import N3Fit, _model_init_args
+from ntkpdf.model import _nn_layer_param_ranges, get_pdf_model
 from ntkpdf.tests.conftest import (
     ACTIVATIONS, BASIS_FL, N_PARAMS, NODES, SYNTHETIC_EPOCHS, SYNTHETIC_NREPLICAS,
     neutral_preprocessing,
 )
-from ntkpdf.utils import INPUT_GRID, XGRID
+from ntkpdf.utils import XGRID
 
 EPOCH = SYNTHETIC_EPOCHS[0]
 
@@ -139,16 +138,17 @@ def test_model_init_args(synthetic_fit):
     }
 
 
-def test_sum_rule_layer_iff_sum_rules(synthetic_fit, ntk_model, metamodels):
+def test_sum_rule_layer_iff_sum_rules(synthetic_fit, ntk_model, ensemble):
     expected = _has_sum_rules(synthetic_fit)
     assert ("impose_msr" in [l.name for l in ntk_model.n3fit_model.layers]) == expected
-    assert ("impose_msr" in [l.name for l in metamodels.layers]) == expected
+    assert ("impose_msr" in [l.name for l in ensemble.model.layers]) == expected
 
 
 @pytest.mark.parametrize("replica", range(1, SYNTHETIC_NREPLICAS + 1))
 def test_preprocessing_reads_agree(synthetic_fit, replica):
-    from_json = np.ravel(_replica_preprocessing(synthetic_fit.path, synthetic_fit.name, replica))
-    from_config = ntkConfig({}).produce_fit_preprocessing(synthetic_fit)[replica - 1]
+    with open(synthetic_fit.path / f"nnfit/replica_{replica}/{synthetic_fit.name}.json") as f:
+        from_json = [x for fl in json.load(f)["preprocessing"] for x in (fl["smallx"], fl["largex"])]
+    from_config = N3Fit(synthetic_fit).preprocessing()[replica - 1]
     loaded = get_pdf_model(synthetic_fit, replica).n3fit_model.get_layer(
         PREPROCESSING_LAYER_ALL_REPLICAS
     ).get_weights()
@@ -287,20 +287,14 @@ def test_layer_kernels_add_up(ntk_model, w):
 # The two model-build paths
 #########################################
 @pytest.mark.parametrize("no_prefactors", [False, True])
-def test_build_paths_agree(synthetic_fit, metamodels, no_prefactors):
+def test_build_paths_agree(synthetic_fit, ensemble, no_prefactors):
     """The keras grid path (multi-replica ``MetaModel``) and the NTK path
     (single-replica, pure JAX) give the same PDFs at a saved epoch: bit-identical
     without sum rules, within a few ULP with them (the sum-rule integrals)."""
     config = ntkConfig({})
     selector = {"name": "s", "no_prefactors": no_prefactors}
-    set_epoch_weights(
-        metamodels,
-        config.produce_fit_weights(synthetic_fit, EPOCH),
-        config.produce_fit_preprocessing(synthetic_fit),
-        SYNTHETIC_NREPLICAS,
-        selector,
-    )
-    grid = np.asarray(predict_pdf_grid(metamodels, INPUT_GRID).data).reshape(SYNTHETIC_NREPLICAS, 14, -1)
+    weights = config.produce_fit_weights(synthetic_fit, EPOCH)
+    grid = np.asarray(ensemble.at(weights, selector).data).reshape(SYNTHETIC_NREPLICAS, 14, -1)
     for r in range(1, SYNTHETIC_NREPLICAS + 1):
         expected = _pdf(get_pdf_model(synthetic_fit, r), _weights(synthetic_fit, r),
                         NO_PREFACTORS if no_prefactors else FULL_MODEL)
