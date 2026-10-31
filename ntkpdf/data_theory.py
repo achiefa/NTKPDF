@@ -219,8 +219,8 @@ def m_matrix_train_val(fk_train_val, cinv_train_val):
     Returns
     -------
     M_tr, M_vl : NTKStats
-        ``(n_params, n_params)`` matrices per replica with the FK column index
-        on both axes.
+        ``(14 nx, 14 nx)`` matrices per replica on the PDF grid, labelled with
+        the FK column index on both axes.
     """
     fk_tr, fk_vl = fk_train_val
     cinv_tr, cinv_vl = cinv_train_val

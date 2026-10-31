@@ -82,7 +82,7 @@ class NTKPDFN3Fit(PDFModel):
 
     Accepts the same constructor arguments as ``colibri_n3fit``'s ``N3FitPDFModel``, so
     it can be built from the ``_init_args`` dict n3fit writes into ``pdf_model.pkl`` as
-    well as from a fit runcard (:func:`_model_init_args`).
+    well as from a fit runcard (:func:`ntkpdf.fits.n3fit._model_init_args`).
     """
 
     def __init__(

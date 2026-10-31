@@ -363,9 +363,9 @@ Two epoch knobs that are easy to confuse:
 - **`--epochs E1 E2 …`** (CLI) → injected as the `Epochspecs` namespace; drives the
   **PDFs-at-epochs** snapshot page (one figure per chosen epoch, `plot_pdfs_at_epoch`).
 - **`custom_epochs: [...]`** (runcard) overrides `produce_epochs`, limiting which epochs the
-  **trajectory** grids (`loss_function_grid`, `h_val_grid`) iterate — useful for speed, but too
-  few/uneven values trip `frame_center` (see Plotting), and a trajectory over 3–4 points is
-  barely a curve.
+  `h_val_grid` and `frobenius_norm_grid` trajectories iterate (`loss_function_grid` depends on
+  `stored_epochs`, i.e. every saved epoch) — useful for speed, but too few/uneven values trip
+  `frame_center` (see Plotting), and a trajectory over 3–4 points is barely a curve.
 
 **Optional closure overlay:** `--show-fakepdf` overlays the closure-test underlying-law PDF
 (`closuretest: fakepdf`) on the PDF-at-epoch plots. It is gated through
@@ -382,8 +382,9 @@ Use the "PDFs at epochs" page as the template (provider `plot_pdfs_at_epoch`):
    `produce_` in `config.py`. Gate optional/closure-only or expensive dependencies behind a
    flag that returns `None` when off (see `produce_fakepdf_grid(fit_kind, show_fakepdf=False)`) so
    a mere parameter dependency doesn't *force* the build/error.
-2. **Plot provider** — `@figuregen` (yields one figure per iteration; lazy, good for many
-   replicas/epochs) or `@figure`, in `plotting/`. Reuse `plot_grids` / the `draw_*`
+2. **Plot provider** — `@figuregen` (yields one figure per iteration; note that reportengine's
+   wrapper collects the whole generator into a list before saving, so it does not bound
+   memory) or `@figure`, in `plotting/`. Reuse `plot_grids` / the `draw_*`
    primitives; yield `(fig, suffix)` for distinct filenames. Add the module to `ntk_providers`
    (`app.py`) if it is new.
 3. **Sub-report** — add `name_report: {meta: Null, template: foo.md}` to `analysis.yaml`,
