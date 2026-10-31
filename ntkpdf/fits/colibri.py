@@ -6,14 +6,15 @@ A fit made with colibri's Monte Carlo gradient descent, for any colibri ``PDFMod
 
 - ``filter.yml``: the runcard;
 - ``pdf_model.pkl``: the model, pickled with dill;
-- ``fit_replicas/replica_<r>/parameters/params_<e>.npz``: the parameters *after* the
-  update of epoch e, i.e. after e + 1 steps (``colibri/gradient_descent.py``); the
-  initial parameters are not saved;
-- ``fit_replicas/replica_<r>/mc_loss.csv``: row k is the training loss *before* the
-  update of epoch k * record_every.
+- ``fit_replicas/replica_<r>/parameters/params_<e>.npz``: the parameters after e
+  epochs, ``params_0`` being the initial ones, as in n3fit
+  (``colibri/gradient_descent.py``);
+- ``fit_replicas/replica_<r>/mc_loss.csv``: row k is the training loss of epoch
+  k * record_every, computed before its update: with a full batch, the loss at
+  ``params_<k * record_every>``.
 
-colibri does not save the pseudodata, the covmat or the initial parameters: they are
-regenerated here with colibri's own functions, from the runcard.
+colibri does not save the pseudodata or the covmat: they are regenerated here with
+colibri's own functions, from the runcard.
 """
 
 import dill
@@ -88,8 +89,8 @@ class ColibriFit:
     def ensemble(self, nreplicas: int, replica_ids=None) -> "ColibriEnsemble":
         """The model for ``nreplicas`` replicas, with their initial parameters drawn as
         colibri draws them (the seed is the replica index): those of ``replica_ids``,
-        or by default the fit's own replicas, followed by fresh ones if ``nreplicas``
-        asks for more."""
+        or by default the fit's own replicas (their ``params_0``), followed by fresh
+        ones if ``nreplicas`` asks for more."""
         pdf_model = self.pdf_model()
         replicas = replica_ids or self._replicas_and_fresh_ones(nreplicas)
         # colibri reads only the forward map's ``param_names``, which are the model's

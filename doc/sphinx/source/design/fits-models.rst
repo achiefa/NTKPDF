@@ -38,7 +38,7 @@ singleton.
      - Same path and array key.
    * - Meaning of ``e``
      - Weights after ``e`` steps; ``params_0`` is the saved initialisation.
-     - Parameters after the update of epoch ``e``: after ``e+1`` updates in full-batch training. The initial point is not saved.
+     - Parameters after ``e`` epochs; ``params_0`` is the saved initialisation.
    * - ``stored_epochs``
      - Reads replica 1, assumes common snapshots, and removes replica 1's best epoch (which n3fit also saves).
      - Intersects saved epochs across all replicas, including early-stopped replicas.
@@ -55,15 +55,14 @@ singleton.
      - ``current`` includes fit, LHAPDF PDF and theory. Supplies direct global data/theory inputs; retains validphys summary tables.
      - ``current`` contains the fit and label only. Disables validphys tables and replaces selector settings with full-model settings.
 
-The snapshot distinction follows n3fit's weight callback and colibri's
-``run_gradient_descent``/``write_mc_replica``. Colibri records parameters after
-the epoch's update loop. With multiple batches, one epoch contains multiple
-optimizer steps, so do not read ``e+1`` as an unconditional batch-step count.
-Its ``mc_loss.csv`` records the training loss evaluated during updates, not a
-fresh loss evaluated at the saved post-update parameters. For full-batch
-training the row at recording index ``k`` is the loss before the update of epoch
-``k * record_every``. This explains why recomputed snapshot losses need not
-match that row.
+The snapshots follow n3fit's weight callback and colibri's
+``run_gradient_descent`` and ``run_monte_carlo_fit``. With multiple batches, one
+colibri epoch contains several optimizer steps, so ``e`` counts epochs, not
+steps. Row ``k`` of colibri's ``mc_loss.csv`` is the training loss of epoch
+``k * record_every``, computed before its update: in full-batch training, the
+loss at ``params_<k * record_every>``. Colibri saves snapshots this way since
+commit 9b8aa8ea of its ``ntk`` branch; earlier versions saved each one an epoch
+later, without the initial point.
 
 Reader and ensemble contracts
 -----------------------------
@@ -174,7 +173,8 @@ The colibri path
 single-replica differentiation, so no separate Keras reconstruction is needed.
 ``ColibriFit.ensemble`` regenerates initial parameters with colibri's
 ``pdf_initial_parameters`` and the replica ID as seed, using the saved
-initialiser settings. It can add fresh replica IDs for initial-ensemble studies.
+initialiser settings; for the fit's replicas they equal the saved ``params_0``.
+It can add fresh replica IDs for initial-ensemble studies.
 Neither reader trains the model.
 
 Only load trusted fit pickles. Unpickling a model is code execution, not a

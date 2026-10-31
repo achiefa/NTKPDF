@@ -182,7 +182,7 @@ behaviour as a member of both readers.
 | | n3fit (`N3Fit`) | colibri (`ColibriFit`) |
 |---|---|---|
 | Model | rebuilt from `filter.yml` (`_model_init_args`) + `nnfit/replica_<r>/<fit>.json` preprocessing | `pdf_model.pkl` (dill; its class must be importable) |
-| `params_<e>.npz` | weights after e steps (`params_0` = init); the best epoch is saved too and left out of `stored_epochs` | parameters after e + 1 steps (saved *after* the update); the initial point is not saved |
+| `params_<e>.npz` | weights after e steps (`params_0` = init); the best epoch is saved too and left out of `stored_epochs` | parameters after e epochs (`params_0` = init), as colibri saves them since 9b8aa8ea |
 | Training data | saved pseudodata + covmat eigensystem (`tables/`) | regenerated with colibri's `central_covmat_index` + `mc_pseudodata` |
 | Selectors | `model`, `no_prefactors`, `nn`, `no_smr` | `model` |
 | Report | validphys fit tables | `report_settings()`: no validphys tables, model-only selectors |
