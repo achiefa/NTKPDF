@@ -207,7 +207,8 @@ function of the flat weight vector**, so `jax.jacfwd` can differentiate it. That
 consumed by `colibri.ntk.ntkutils.compute_ntk` and by `ntkpdf/hessian.py`. The kwargs come
 from the selector frozensets in `config.py` (`FULL_MODEL`/`NO_PREFACTORS`/`NN`/`NO_SMR`,
 and `layer_kwargs(...)` for the layer-restricted kernel). Both paths force keras
-`floatx=float64` so they agree bit-for-bit.
+`floatx=float64` and agree bit-for-bit without sum rules (to a few ULP with them, from the
+sum-rule integrals; pinned by `tests/test_model.py::test_build_paths_agree`).
 
 This module replaces **colibri-n3fit**, which ntkpdf used to depend on. That package exists
 to drive *colibri's fitting machinery* with an n3fit network; ntkpdf never runs a fit, so

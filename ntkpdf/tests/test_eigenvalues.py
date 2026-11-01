@@ -66,3 +66,9 @@ def test_eigenvalues_serialised_under_name(ntk_fit, clean_eigenvalue_cache):
     assert model_file.exists()
     assert nn_file.exists()
     assert model_file != nn_file
+
+
+def test_no_smr_equals_model_without_sum_rules(clean_eigenvalue_cache):
+    """The test fit has ``sum_rules: false``, so there is no ``impose_msr`` layer
+    to exclude and ``no_smr`` must reproduce the full model exactly."""
+    np.testing.assert_array_equal(_eigenvalues("no_smr"), _eigenvalues("model"))
