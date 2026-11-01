@@ -22,11 +22,17 @@ pdfs:
 fits:
   - from_: current
 
+# validphys's fit tables in report.md (statistical summary, t0 losses, theory covmat,
+# dataset properties) need the fit's LHAPDF set and n3fit's replica files: one entry
+# renders them once; colibri fits set an empty list (see ntkpdf.fits).
+Validphyssummaries:
+  - {}
+
 # custom_epochs: [500, 1000, 5000]
 
 # Note: singular `fit` is injected directly (not via `from_: current`) by
 # ntkanalysis.complete_mapping. Using `from_` here would taint config resolution
-# and stop base_metamodels/init_grids_by_name from being cached per (fit, nreplicas).
+# and stop pdf_ensemble/init_grids_by_name from being cached per (fit, nreplicas).
 
 Rankspecs:
   - rank_indices: [1, 2, 3, 4, 6, 7, 8, 9, 10]

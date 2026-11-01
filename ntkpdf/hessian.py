@@ -3,19 +3,20 @@ ntkpdf.hessian.py
 
 Parameter-space Hessian of the training loss at a given epoch.
 
-The fit minimises, per replica, the diagonal-basis training chi2 normalised by the
-number of training points,
+The fit minimises, per replica, the training chi2 normalised by the number of training
+points,
 
 .. math::
 
     L(\\theta) = \\frac{1}{N_{\\rm tr}}\\,(y_{\\rm tr} - FK_{\\rm tr}\\,f(\\theta))^{T}
-                 \\,{\\rm diag}(1/\\Lambda_{\\rm tr})\\,(y_{\\rm tr} - FK_{\\rm tr}\\,f(\\theta)),
+                 \\,C^{-1}_{\\rm tr}\\,(y_{\\rm tr} - FK_{\\rm tr}\\,f(\\theta)),
 
-where ``f(theta)`` is the (flattened, flavour-major) PDF grid produced by the network
-with flat weight vector ``theta``. This is exactly the scalar built in
-``data_theory.loss_function_grid`` (same per-replica ``FK_tr``/``Cinv_tr``/``y_tr``,
-positional matmul), so the Hessian computed here is the curvature of the *actual* loss
-the fit descended.
+in the basis the fit used (an n3fit fit: the covmat's eigenbasis, where ``C^-1`` is
+diagonal; a colibri fit: the data points). ``f(theta)`` is the (flattened,
+flavour-major) PDF grid produced by the model with flat parameter vector ``theta``.
+This is exactly the scalar built in ``data_theory.loss_function_grid`` (same
+per-replica ``FK_tr``/``Cinv_tr``/``y_tr``, positional matmul), so the Hessian computed
+here is the curvature of the *actual* loss the fit descended.
 
 The differentiation reuses colibri's NTK route: ``pdf_model.grid_values_func(XGRID,
 **kwargs)`` is a pure-JAX function of the flat weights, so ``jax.hessian`` gives the
@@ -41,24 +42,22 @@ from colibri.ntk.ntkutils import NTKStats
 log = logging.getLogger(__name__)
 
 
-def _loss_hessian_by_replica(pdf_func, params, fk_tr, cinv_diag_tr, y_tr):
+def _loss_hessian_by_replica(pdf_func, params, fk_tr, cinv_tr, y_tr):
     """Full ``(P, P)`` Hessian of the training loss for one replica, via
     ``jax.hessian`` of the pure-JAX ``pdf_func`` (a function of the flat weights
-    ``params``). ``cinv_diag_tr`` is the diagonal of ``Cinv_tr`` (the metric is
-    diagonal in the eigenbasis). Positional matmul throughout, matching
-    ``loss_function_grid``."""
+    ``params``). Positional matmul throughout, matching ``loss_function_grid``."""
     import jax
     import jax.numpy as jnp
 
     fk = jnp.asarray(fk_tr)
-    cinv_diag = jnp.asarray(cinv_diag_tr)
+    cinv = jnp.asarray(cinv_tr)
     y = jnp.asarray(y_tr)
     n_tr = y.shape[0]
 
     def loss(p):
         f = pdf_func(p).reshape(-1)              # flavour-major, == FK column order
         resid = y - fk @ f
-        return jnp.sum(cinv_diag * resid ** 2) / n_tr
+        return resid @ cinv @ resid / n_tr
 
     return np.asarray(jax.hessian(loss)(params))
 
@@ -67,8 +66,8 @@ def loss_hessian_at_epoch(
     fit,
     replicas_path,
     epoch,
-    fk_diagonal_basis_train_val,
-    cinv_diagonal_basis_train_val,
+    fk_train_val,
+    cinv_train_val,
     get_train_val_data,
     kwargs=frozenset(),
     replica_index_list=None,
@@ -87,8 +86,8 @@ def loss_hessian_at_epoch(
     from colibri.ntk.ntkutils import get_parameters_all_epochs, get_replica_idx_list
 
     idx = 0 if training else 1
-    fk = fk_diagonal_basis_train_val[idx]
-    cinv = cinv_diagonal_basis_train_val[idx]
+    fk = fk_train_val[idx]
+    cinv = cinv_train_val[idx]
     data = get_train_val_data[idx]
 
     if replica_index_list is None:
@@ -109,7 +108,7 @@ def loss_hessian_at_epoch(
             pdf_func,
             params,
             fk.data[f_idx],
-            np.diag(cinv.data[f_idx]),
+            cinv.data[f_idx],
             data.data[f_idx].reshape(-1),
         )
         hessians.append(H)

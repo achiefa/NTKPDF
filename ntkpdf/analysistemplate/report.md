@@ -7,6 +7,7 @@ We are analysing `{@ current fit_id @}`: {@ current description @}
 
 {@ summarise_ntk_fits @}
 
+{@with Validphyssummaries@}
 Statistical summary
 -------------------
 
@@ -23,6 +24,7 @@ Theory covariance summary
 Dataset properties
 ------------------
 {@current fit_datasets_properties_table@}
+{@endwith@}
 
 Initialisation
 --------------

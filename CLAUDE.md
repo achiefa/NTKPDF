@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`ntkpdf` is a small analysis app for studying **already-trained** NNPDF/n3fit PDF fits
-through the lens of the **Neural Tangent Kernel (NTK)**. It does not run fits; it loads
-the weights a fit saved to disk (at multiple training epochs), rebuilds the n3fit PDF
-model in memory, and produces eigenvalue spectra, PDF grids, and comparison reports.
+`ntkpdf` is a small analysis app for studying **already-trained** PDF fits through the lens
+of the **Neural Tangent Kernel (NTK)**: n3fit neural networks, and colibri Monte Carlo fits
+of any colibri model (e.g. colibri_msht's FPPDF parametrisation). It does not run fits; it
+loads the parameters a fit saved to disk (at multiple training epochs), rebuilds the model in
+memory, and produces eigenvalue spectra, PDF grids, and comparison reports.
 
 It is a thin **reportengine** layer stacked on top of two upstream packages:
 
@@ -37,6 +38,20 @@ Run these with the project's environment Python. grep those checkouts directly w
 provider name or symbol isn't defined in this repo. If a package isn't importable, ask the
 user to pin down its location.
 
+## Running it: setup, fits, reports
+
+`README.md` is the recipe for a new machine, in order: the conda env (`environment.yml`),
+colibri_msht added with `pip install --no-deps -e` (without `--no-deps` its requirements
+replace colibri's `ntk` branch), producing a fit (colibri_msht or n3fit, with the runcard
+keys that save `params_<e>.npz`), moving it into the NNPDF results folder, and running
+`ntkanalysis`. Follow it rather than improvising, and update it when one of these steps
+changes. colibri_msht's own README describes its runcards and tests.
+
+Before trusting a run, check which code the environment imports:
+`python -c "import ntkpdf, colibri; print(ntkpdf.__file__, colibri.__file__)"`. Editable
+installs may point at another checkout (e.g. the main checkout while you work in a
+worktree); put this checkout first on `PYTHONPATH` to run it.
+
 ## Reportengine: the one thing you must internalise
 
 This app is **declarative**. You almost never call functions directly. Instead:
@@ -45,7 +60,7 @@ This app is **declarative**. You almost never call functions directly. Instead:
   **provider**. Its **parameter names are its dependencies** — reportengine resolves each
   parameter either to another provider's output or to a runcard key.
 - `ntkConfig.produce_*` / `parse_*` methods (`ntkpdf/config.py`) are also providers; e.g.
-  `produce_metamodels` is what gets called when something depends on `metamodels`.
+  `produce_pdf_ensemble` is what gets called when something depends on `pdf_ensemble`.
 - **Renaming a parameter or function silently rewires the dependency graph.** To understand
   what runs, trace parameter names backwards from the action in the runcard.
 - To add a feature: add a function to an existing provider module (or a new module added to
@@ -91,7 +106,7 @@ relying on caching/memory behaviour.
   singular `fit` is injected directly in `ntkanalysis.complete_mapping`
   (`autosettings['fit'] = currentmap`, *not* `fit: {from_: current}`); the data/theory chain
   (`dataset_inputs`, `theory`, `theoryid`) is injected the same way (read once from
-  `fit.as_input()`), so `data → ntk_fast_kernel_arrays → fitting_covmat_eigensystem` resolve
+  `fit.as_input()`), so `data → ntk_fast_kernel_arrays → training_data` resolve
   once instead of reloading all commondata/FK per leaf (an OOM — see case study below).
 - **`collect` is re-made at every request site.** A `collect` nested inside presentation
   loops recomputes its whole subtree per iteration. Build the heavy thing **once** (a
@@ -123,36 +138,40 @@ validphys data chain.** Fixes (each removed GBs, all verified bit-identical): (1
 `fitting_covmat_eigensystem` made a `produce_` (loads the eigensystem CSV once; the FK-index
 relabel — which needs a provider — moved to its one consumer `fk_diagonal_basis_train_val`);
 (2) `dataset_inputs`/`theory`/`theoryid` injected directly (taint break, above). The residual
-`m_matrix` chain (`fk/cinv_diagonal_basis_train_val`, tainted via
-`read_replica_pseudodata → context_index`) needs the same build-once-and-index treatment.
+`m_matrix` chain (then `fk/cinv_diagonal_basis_train_val`) is now built once per fit, in the
+`training_data` production.
 
 ## Commands
 
 ```bash
-# Install (Poetry; nnpdf + colibri must already be importable in the env)
-poetry install
+# Install: see README.md (conda env from environment.yml, then colibri_msht with --no-deps)
 
 # Run a report from a runcard (output dir defaults to the runcard's stem)
 ntkpdf path/to/runcard.yaml
 ntkpdf path/to/runcard.yaml -o output_dir
 
-# Generate a full NTK comparison report for one fit via the bundled template.
+# Generate a full NTK report for one fit via the bundled template.
 # Fills ntkpdf/analysistemplate/analysis.yaml with the chosen fit, then runs it.
-ntkanalysis <fit_id> --title "..." --author "..." --keywords k1 k2
-ntkanalysis -i        # interactive: prompts for fit/title/author/keywords
+ntkanalysis <fit_id> --title "..." --author "..." --keywords k1 k2 -o output_dir
+# `python -m ntkpdf.scripts.ntkanalysis ...` is the same, and works without the executable
+# (`pip install -e .` creates it). With -i (interactive) still pass --title: the title
+# prompt's default refers to an undefined `reference_fit`.
 
 # Useful ntkanalysis flags:
 #   --epochs 100 500 1000   PDF-at-epoch snapshot pages (-> Epochspecs namespace)
+#   --replicas 1 2          single-replica eigenvalue/feature pages (-> Replicaspecs)
 #   --show-fakepdf          overlay the closure-test underlying law on those plots
 #   --thcovmat_if_present   use the theory covmat for the statistical estimators
 #   --formats pdf           figure formats (default png+pdf; this avoids the PNGs)
 ```
 
 Tests live in `ntkpdf/tests/`. `pytest -m "not fit"` runs the fast ones; plain `pytest` also runs
-the `fit`-marked end-to-end tests, which download the test fit (`conftest.FIT`) on demand.
+the `fit`-marked end-to-end tests, which download the n3fit test fit (`conftest.FIT`) and build a
+small colibri_msht fit (`conftest.COLIBRI_FIT`, so colibri_msht must be installed) on demand, both
+into the NNPDF results folder.
 
-`ntkpdf/scripts/260526-ac-02-ntk-sgd/` is a captured example run (input runcard, figures,
-tables, `meta.yaml`) — a good reference for what a completed report looks like.
+To see what a completed report looks like, run `ntkanalysis` on the small colibri test fit
+(`ntkpdf_test_colibri_msht`, built by the fit tests).
 
 `ntkpdf/examples/*.ipynb` are the best **API usage** references (they call providers directly,
 the fastest way to prototype/debug a new one): `h_val_grid.ipynb` (build + plot an `hValGrid`)
@@ -169,38 +188,42 @@ a way that bypasses `ntkpdf/__init__.py`, or the backend will default to TensorF
 
 ## Architecture
 
-### Loading a fit from disk (`ntkpdf/config.py`)
+### Loading a fit from disk (`ntkpdf/fits/`)
 
-The `produce_*` methods know the on-disk layout of an n3fit/colibri fit and turn it into
-in-memory objects. Key files inside a fit directory:
+ntkpdf reads two kinds of fit, which store their results differently. `ntkpdf.fits.load_fit`
+tells them apart (an n3fit fit has `nnfit/`; a colibri fit pickles its model in
+`pdf_model.pkl`) and returns a reader with the same members for both, `N3Fit`
+(`fits/n3fit.py`) or `ColibriFit` (`fits/colibri.py`). `ntkConfig.produce_fit_kind` exposes
+it as `fit_kind`; every production that depends on how a fit is stored is a one-line
+delegation to it, and **nothing else branches on the kind** — add new kind-specific
+behaviour as a member of both readers.
 
-- `fit_replicas/replica_<r>/parameters/params_<epoch>.npz` — raw weight vectors per epoch
-  (`produce_fit_weights`). This is the NTK-specific artifact; "epochs" means these snapshots.
-- `nnfit/replica_<r>/<fitname>.json` — preprocessing exponents, `best_epoch`
-  (`produce_fit_preprocessing`, `produce_best_epochs`).
-- `nnfit/replica_<r>/chi2exps.log` — per-epoch train/val losses (`log_losses_replica`).
+| | n3fit (`N3Fit`) | colibri (`ColibriFit`) |
+|---|---|---|
+| Model | rebuilt from `filter.yml` (`_model_init_args`) + `nnfit/replica_<r>/<fit>.json` preprocessing | `pdf_model.pkl` (dill; its class must be importable) |
+| `params_<e>.npz` | weights after e steps (`params_0` = init, since nnpdf 8e0b89e3b); the best epoch is saved too and left out of `stored_epochs` | parameters after e epochs (`params_0` = init), as colibri saves them since 9b8aa8ea |
+| Training data | saved pseudodata + covmat eigensystem (`tables/`) | regenerated with colibri's `central_covmat_index` + `mc_pseudodata` |
+| Selectors | `model`, `no_prefactors`, `nn`, `no_smr` | `model` |
+| Report | validphys fit tables | `report_settings()`: no validphys tables, model-only selectors |
 
-The model pipeline: `produce_model_info` (reads the fit's runcard architecture) →
-`produce_base_metamodels` (builds a fresh `generate_pdf_model` with random init **once** per
-fit/nreplicas, and snapshots its preprocessing into `_ntk_base_preprocessing`) →
-`produce_metamodels` (thin wrapper that applies a `model_selector` via the module-level
-`_apply_model_selector`, which only overwrites the cheap prefactor weights — `no_prefactors`
-sets alpha=1/beta=0 — so selectors share one expensive build) → `produce_model_at_epoch`
-(loads a saved epoch's weights via `set_epoch_weights`/`_unpack_params`) →
-`produce_pdf_at_epoch` (predicts on the x-grid and wraps the result in `NTKStats`, via
-`predict_pdf_grid`). Loading weights also rewrites the preprocessing layer, so
-`set_epoch_weights` takes `model_selector` and re-applies `no_prefactors` itself; every
-weight-loading call site must pass it through, or the selector is silently dropped.
-`produce_init_grids_by_name` builds the per-selector PDF grids at initialisation in one
-shared production.
+Common to both: `fit_replicas/replica_<r>/parameters/params_<epoch>.npz`, the flat
+parameter vectors per epoch (`produce_fit_weights`); "epochs" means these snapshots.
 
-The base model is mutated in place and reused; this is safe under reportengine's sequential
-execution because each grid is materialised to NumPy before the next mutation.
+The PDF pipeline: `produce_pdf_ensemble(fit_kind, nreplicas)` builds the model **once** per
+fit/nreplicas — `N3FitEnsemble` (the multi-replica keras `MetaModel` of
+`generate_pdf_model`, fresh seeds 0..n-1) or `ColibriEnsemble` (`jit(vmap(grid_values_func))`)
+— and `pdf_at_epoch` (`ensemble.at(fit_weights, model_selector)`), `pdf_at_init`
+(`ensemble.at_init(model_selector)`), `init_grids_by_name` and `loss_function_grid` evaluate
+it, as `NTKStats` on `EVOL_INDEX`. The n3fit network is shared and mutated in place, but each
+call sets all the weights it needs (an epoch's weights and the fitted preprocessing, with
+`no_prefactors` re-applied by `set_epoch_weights`; or the snapshot of the initial weights)
+and returns a NumPy-backed result, so nothing depends on the order of the calls. Plotting
+grids come from `plotting_grid_from_ntkstat` (`utils.py`) for both kinds.
 
 ### The NTK model interface (`ntkpdf/model.py`)
 
 **There are two model-build paths and they are not the same object.** The one above
-(`produce_base_metamodels`) builds a *multi-replica* keras model for PDF **grids/plots**.
+(`N3FitEnsemble`) builds a *multi-replica* keras model for PDF **grids/plots**.
 The NTK path needs something different: a *single-replica* model exposed as a **pure JAX
 function of the flat weight vector**, so `jax.jacfwd` can differentiate it. That is
 `NTKPDFN3Fit.grid_values_func(xgrid, exclude_layers, remove_prefactors, grad_layers)`,
@@ -231,10 +254,11 @@ model. `ntkpdf.model.install()` therefore rebinds `get_pdf_model` over colibri's
   colibri's NTK providers **directly**, without going through `ntkpdf.api`, must call
   `install()` itself — see `examples/layer_ntk.ipynb`.
 
-Unlike colibri's loader, ours takes no `pdf_model.pkl`: it builds from the fit's own
-`filter.yml` (`_model_init_args`, the same runcard keys `produce_model_info` reads) and loads
-the replica's fitted preprocessing exponents from `nnfit/replica_<r>/<fit>.json`. The pkl
-that n3fit's `model_trainer.py` writes for colibri is now unused by ntkpdf.
+Our `get_pdf_model` asks the fit's reader. For an n3fit fit it takes no `pdf_model.pkl`:
+`N3Fit.pdf_model` builds from the fit's own `filter.yml` (`_model_init_args`, the same runcard
+keys `N3Fit.model_info` reads) and loads the replica's fitted preprocessing exponents from
+`nnfit/replica_<r>/<fit>.json`; the pkl that n3fit's `model_trainer.py` writes for colibri is
+unused. For a colibri fit, `ColibriFit.pdf_model` unpickles `pdf_model.pkl`, as colibri does.
 
 The patch is invisible from colibri's side: if colibri grows a *new* `from colibri.utils
 import get_pdf_model` site, that site silently keeps the old loader and will try to import
@@ -249,19 +273,20 @@ pandas DataFrames presented as a `(n_replicas, …, …)` array, with a validphy
 interface and an index-aware `@` (matmul aligns inner indices, so FK/Cinv chains must share
 labels). `STAT_TYPES["NKT"] = NTKStats` is registered in `vpinterface.py`.
 
-`ntkpdf/data_theory.py` builds the FK tables and covmat machinery used to reconstruct the
-fit's training metric. Two fit conventions are handled throughout (gated on
-`fit.as_input()["diagonal_basis"]`, default `True`):
+`ntkpdf/data_theory.py` builds the FK tables (`_build_ntk_fast_kernel_arrays`, exposed as the
+production `ntk_fast_kernel_arrays` on `fit_kind.data()`), and `produce_training_data` asks the
+fit's reader for the per-replica pseudodata, FK and Cinv of the training and validation
+losses (`fits.common.TrainValData`), once per fit. The providers `get_train_val_data`,
+`fk_train_val`, `cinv_train_val` (each a `(training, validation)` pair of `NTKStats`, rows
+labelled `data_idx`) and `m_matrix_train_val` (`M = FKᵀ Cinv FK`) read from it. The two kinds
+use the basis their fit used; the loss, `M` and the h values do not depend on it:
 
-- **diagonal_basis=True** (modern): pseudodata and FK are rotated into the diagonalised
-  covariance eigenbasis; rows are labelled `"eigenmode k"` and sorted ascending by `k`.
-  `fitting_covmat_eigensystem` reads the eigensystem CSV written by `vp-setupfit`.
-- **diagonal_basis=False** (legacy): everything stays in the `(group, dataset, id)`
-  MultiIndex and is reindexed against `groups_index`.
-
-The train/val pipeline (`train_val_masks` → `fk_diagonal_basis_train_val` /
-`cinv_diagonal_basis_train_val` → `m_matrix_train_val`) reproduces the per-replica training
-metric `M = (V·FK)ᵀ diag(1/Λ) (V·FK)` exactly as used during the fit.
+- **n3fit** (`diagonal_basis: true`, required): the covmat's eigenbasis, `R C Rᵀ = diag(Λ)`
+  from the CSV written by `vp-setupfit`, so `fk = R·FK` and `Cinv = diag(1/Λ)`, split by
+  eigenmode.
+- **colibri**: the data points; the t0 covmat and each replica's pseudodata are regenerated
+  with colibri's own functions, and `Cinv = C[tr, tr]⁻¹` is dense. colibri does not record
+  `--trval_index`; 0 (its default) is assumed, which matters only with a validation split.
 
 ### Bases and rotations (`ntkpdf/bases.py`, `ntkpdf/utils.py`)
 
@@ -357,13 +382,13 @@ Two epoch knobs that are easy to confuse:
 - **`--epochs E1 E2 …`** (CLI) → injected as the `Epochspecs` namespace; drives the
   **PDFs-at-epochs** snapshot page (one figure per chosen epoch, `plot_pdfs_at_epoch`).
 - **`custom_epochs: [...]`** (runcard) overrides `produce_epochs`, limiting which epochs the
-  **trajectory** grids (`loss_function_grid`, `h_val_grid`) iterate — useful for speed, but too
-  few/uneven values trip `frame_center` (see Plotting), and a trajectory over 3–4 points is
-  barely a curve.
+  `h_val_grid` and `frobenius_norm_grid` trajectories iterate (`loss_function_grid` depends on
+  `stored_epochs`, i.e. every saved epoch) — useful for speed, but too few/uneven values trip
+  `frame_center` (see Plotting), and a trajectory over 3–4 points is barely a curve.
 
 **Optional closure overlay:** `--show-fakepdf` overlays the closure-test underlying-law PDF
 (`closuretest: fakepdf`) on the PDF-at-epoch plots. It is gated through
-`produce_fakepdf_grid(fit, show_fakepdf=False)`, which returns `None` when off — so the page
+`produce_fakepdf_grid(fit_kind, show_fakepdf=False)`, which returns `None` when off — so the page
 still works for fits that are not closure tests (a plain `fakepdf_grid` dependency would have
 *forced* the lookup and errored). This "gate an optional/expensive dependency behind a flag
 that returns None" is the general pattern for optional overlays.
@@ -374,10 +399,11 @@ Use the "PDFs at epochs" page as the template (provider `plot_pdfs_at_epoch`):
 
 1. **Data/grid provider** — a plain provider (e.g. `pdf_grid_at_epoch` in `pdfgrids.py`) or a
    `produce_` in `config.py`. Gate optional/closure-only or expensive dependencies behind a
-   flag that returns `None` when off (see `produce_fakepdf_grid(fit, show_fakepdf=False)`) so
+   flag that returns `None` when off (see `produce_fakepdf_grid(fit_kind, show_fakepdf=False)`) so
    a mere parameter dependency doesn't *force* the build/error.
-2. **Plot provider** — `@figuregen` (yields one figure per iteration; lazy, good for many
-   replicas/epochs) or `@figure`, in `plotting/`. Reuse `plot_grids` / the `draw_*`
+2. **Plot provider** — `@figuregen` (yields one figure per iteration; note that reportengine's
+   wrapper collects the whole generator into a list before saving, so it does not bound
+   memory) or `@figure`, in `plotting/`. Reuse `plot_grids` / the `draw_*`
    primitives; yield `(fig, suffix)` for distinct filenames. Add the module to `ntk_providers`
    (`app.py`) if it is new.
 3. **Sub-report** — add `name_report: {meta: Null, template: foo.md}` to `analysis.yaml`,

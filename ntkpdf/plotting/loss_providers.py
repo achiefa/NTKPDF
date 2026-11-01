@@ -49,12 +49,12 @@ def plot_losses_all_replicas(
 
         # get_plotting_data takes a 0-based row; `replica` is the 1-based id.
         tr_stats = tr_grid.get_plotting_data(replica_idx=replica - 1)  # NTKStats (1, n_epochs)
-        vl_stats = vl_grid.get_plotting_data(replica_idx=replica - 1)
-
         handles.append(draw_line(ax, tr_stats, tr_grid.xgrid))
         labels.append(r"$\rm Training$")
-        handles.append(draw_line(ax, vl_stats, vl_grid.xgrid))
-        labels.append(r"$\rm Validation$")
+        if vl_grid is not None:  # no validation data
+            vl_stats = vl_grid.get_plotting_data(replica_idx=replica - 1)
+            handles.append(draw_line(ax, vl_stats, vl_grid.xgrid))
+            labels.append(r"$\rm Validation$")
 
         ax.set_xscale(xscale)
         ax.set_yscale(yscale)
@@ -98,14 +98,12 @@ def plot_losses_ensemble(
     handles, labels = [], []
 
     # replica_idx=None -> full ensemble (nreplicas, n_epochs), as draw_bounds wants.
-    tr_stats = tr_grid.get_plotting_data()
-    vl_stats = vl_grid.get_plotting_data()
-
     band_kw = dict(central_value=central_value, show_std=show_std, show_68=show_68)
-    handles.append(draw_bounds(ax, tr_stats, tr_grid.xgrid, **band_kw))
+    handles.append(draw_bounds(ax, tr_grid.get_plotting_data(), tr_grid.xgrid, **band_kw))
     labels.append(r"$\rm Training$")
-    handles.append(draw_bounds(ax, vl_stats, vl_grid.xgrid, **band_kw))
-    labels.append(r"$\rm Validation$")
+    if vl_grid is not None:  # no validation data
+        handles.append(draw_bounds(ax, vl_grid.get_plotting_data(), vl_grid.xgrid, **band_kw))
+        labels.append(r"$\rm Validation$")
 
     ax.set_xscale(xscale)
     ax.set_yscale(yscale)

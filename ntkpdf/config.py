@@ -1,29 +1,28 @@
 """ntkpdf.config.py
 
 This module contains the configuration and environment classes for the ntkpdf app.
+
+Whatever depends on how a fit stores its results (n3fit or colibri) is delegated to the
+fit's reader, ``fit_kind`` (see :mod:`ntkpdf.fits`).
 """
 
-import json
 import logging
 import numpy as np
-import pandas as pd
 
 from collections.abc import Iterable, Mapping, Sequence
 from numbers import Integral
-from pathlib import Path
-
-from numpy.typing import ArrayLike
 
 from colibri.config import colibriConfig
 from colibri.ntk import NTKStats
-from n3fit.backends import MetaModel
-from n3fit.model_gen import generate_pdf_model, ReplicaSettings
 from reportengine.namespaces import NSList
 from reportengine.configparser import ConfigError
 from validphys.core import PDF, FitSpec
-from validphys.pdfgrids import XPlottingGrid
+from validphys.pdfgrids import XPlottingGrid, xplotting_grid
 
-from ntkpdf.utils import BestEpochStat, INPUT_GRID, EVOL_INDEX
+from ntkpdf.data_theory import _build_ntk_fast_kernel_arrays
+from ntkpdf.fits import load_fit
+from ntkpdf.fits.common import TrainValData, sort_replicas
+from ntkpdf.utils import EVOL_LIST, XGRID, plotting_grid_from_ntkstat
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +30,8 @@ NO_PREFACTORS = frozenset({"remove_prefactors": True}.items())
 NN = frozenset({"exclude_layers":('impose_msr',), "remove_prefactors": True}.items())
 NO_SMR = frozenset({"exclude_layers":('impose_msr',)}.items())
 FULL_MODEL = frozenset({})
+# Model selector name -> colibri NTK ``kwargs`` (the options of ``grid_values_func``).
+SELECTOR_KWARGS = {"model": FULL_MODEL, "no_prefactors": NO_PREFACTORS, "nn": NN, "no_smr": NO_SMR}
 
 def layer_kwargs(layers: Iterable[int], cumulative: bool = True, base: frozenset = NN) -> frozenset:
     """Build the colibri NTK ``kwargs`` frozenset for a layer-restricted NTK on top of
@@ -40,99 +41,9 @@ def layer_kwargs(layers: Iterable[int], cumulative: bool = True, base: frozenset
     grad = tuple(range(1, max(layers) + 1)) if cumulative else tuple(layers)
     return frozenset({**dict(base), "grad_layers": grad}.items())
 
-#----------------------------------------
-# Utilities functions
-#########################################
-def _sort_replicas(replicas: Iterable[Path]) -> list[Path]:
-    return sorted(replicas, key=lambda r: int(r.stem.split("_")[-1]))
-
-def _unpack_params(shapes: Sequence[Sequence[int]], weights: np.ndarray, prepr: Sequence[ArrayLike]) -> dict[str, list]:
-    """Returns the weight parameters in the format expected by the n3fit model."""
-    wight_list = []
-    pos = 0
-    for shape in shapes:
-        size = np.prod(shape)
-        param = weights[pos:pos+size]
-        param = param.reshape(shape)
-        wight_list.append(param)
-        pos += size
-
-    params_dict = dict(
-        all_NNs=wight_list,
-        preprocessing_factor=prepr
-    )
-    return params_dict
-
-def _neutral_preprocessing(prepr: Sequence[ArrayLike]) -> list[np.ndarray]:
-    """Preprocessing weights are ordered [alpha, beta] per flavour and the
-    prefactor x^(1-alpha)*(1-x)^beta is neutralised by alpha=1, beta=0."""
-    return [np.full_like(w, 1.0 if j % 2 == 0 else 0.0) for j, w in enumerate(prepr)]
-
-def _has_no_prefactors(model_selector: Mapping | None) -> bool:
-    return model_selector is not None and model_selector.get("no_prefactors")
-
-def set_epoch_weights(
-    metamodels: MetaModel,
-    weights: Sequence[np.ndarray],
-    fit_preprocessing: Sequence[Sequence[ArrayLike]],
-    nreplicas: int,
-    model_selector: Mapping | None = None,
-) -> MetaModel:
-    """Load one epoch's per-replica ``weights`` (flat vectors) and
-    ``fit_preprocessing`` into the shared ``metamodels`` in place, and return it.
-    Shared by the per-epoch providers and by the streaming loss loop in
-    ``ntkpdf.data_theory`` (kept module-level so the latter need not go through a
-    config method).
-
-    Loading rewrites the preprocessing layer too, undoing whatever
-    :func:`_apply_model_selector` set, so ``model_selector`` is re-applied here."""
-    if _has_no_prefactors(model_selector):
-        fit_preprocessing = [_neutral_preprocessing(p) for p in fit_preprocessing]
-    shapes = [list(v.shape) for v in metamodels.get_replica_weights(0)["all_NNs"]]
-    for idx in range(nreplicas):
-        parameters = _unpack_params(shapes, weights[idx], fit_preprocessing[idx])
-        metamodels.set_replica_weights(parameters, idx)
-    return metamodels
-
-def predict_pdf_grid(metamodels: MetaModel, input_grid: np.ndarray, vetoes: np.ndarray | None = None) -> NTKStats:
-    """Predict the PDF grid from ``metamodels`` and wrap it as ``NTKStats``."""
-    pdf_grids = metamodels.predict({"pdf_input": input_grid.T}, verbose=False)[0]
-    if vetoes is not None:
-        pdf_grids = pdf_grids[vetoes]
-    pdf_grids = pdf_grids.transpose((0, 2, 1)).reshape(pdf_grids.shape[0], -1, 1)
-    f = NTKStats(pdf_grids)
-    f.set_index(EVOL_INDEX, None)
-    return f
-
-def _apply_model_selector(pdf_model: MetaModel, nreplicas: int, model_selector: Mapping | None = None) -> MetaModel:
-    """Set the preprocessing (prefactor) weights of ``pdf_model`` in place
-    according to ``model_selector``, and return it.
-
-    The expensive replica networks are built once in
-    ``produce_base_metamodels``; this only overwrites the cheap preprocessing
-    weights, so different selectors of the same base share the same networks
-    instead of being rebuilt. The preprocessing is always fully (re)set to a
-    well-defined state -- the original snapshot (``_ntk_base_preprocessing``)
-    for the default case, or the neutral exponents for ``no_prefactors`` -- so
-    the result is independent of the order in which selectors are applied to the
-    shared, mutated base.
-    """
-    no_prefactors = _has_no_prefactors(model_selector)
-    if no_prefactors:
-        log.info("Generating PDF model with no prefactors (i.e. small-x and large-x exponents set to 1 and 0, respectively).")
-
-    for i in range(nreplicas):
-        original = pdf_model._ntk_base_preprocessing[i]
-        if no_prefactors:
-            new_prepr = _neutral_preprocessing(original)
-        else:
-            new_prepr = [w.copy() for w in original]
-
-        replica_weights = pdf_model.get_replica_weights(i)
-        replica_weights["preprocessing_factor"] = new_prepr
-        pdf_model.set_replica_weights(replica_weights, i)
-
-    return pdf_model
+def _evolution_grid(pdfs: NTKStats) -> XPlottingGrid:
+    """Plotting grid (evolution basis, Q = 1.65 GeV) of PDFs on ``EVOL_INDEX``."""
+    return plotting_grid_from_ntkstat(pdfs.reshape((len(EVOL_LIST), len(XGRID))), XGRID, "evolution", EVOL_LIST)
 
 #----------------------------------------
 # Config class
@@ -140,28 +51,27 @@ def _apply_model_selector(pdf_model: MetaModel, nreplicas: int, model_selector: 
 class ntkConfig(colibriConfig):
     """Configuration class for ntkpdf, inheriting from colibriConfig."""
 
-    def produce_kwargs(self, name: str) -> frozenset:
-        if name == "model":
-            return FULL_MODEL
-        elif name == "no_prefactors":
-            return NO_PREFACTORS
-        elif name == "nn":
-            return NN
-        elif name == "no_smr":
-            return NO_SMR
-        else:
-            raise ConfigError(f"Unknown model selector name: {name}")
-            
+    def produce_fit_kind(self, fit: FitSpec):
+        """The reader of ``fit``, an :class:`~ntkpdf.fits.n3fit.N3Fit` or a
+        :class:`~ntkpdf.fits.colibri.ColibriFit`."""
+        return load_fit(fit)
 
-    def produce_input_grid(self) -> np.ndarray:
-        return INPUT_GRID
+    def produce_kwargs(self, fit_kind, name: str) -> frozenset:
+        """The colibri NTK ``kwargs`` of the model selector ``name``, which must be one
+        of the fit's (a colibri model has no prefactors or network layers)."""
+        if name not in fit_kind.selectors:
+            raise ConfigError(
+                f"Model selector '{name}' does not apply to fit {fit_kind.fit.name}; "
+                f"choose from {fit_kind.selectors}."
+            )
+        return SELECTOR_KWARGS[name]
 
     def produce_wreplica_paths(self, fit: FitSpec) -> NSList:
         """Returns the paths to the weight replicas for the specified fit."""
         path = fit.path / "fit_replicas"
-        sorted_replicas = _sort_replicas(path.glob("replica_*"))
+        sorted_replicas = sort_replicas(path.glob("replica_*"))
         return NSList(sorted_replicas, nskey="wreplica_path")
-    
+
     def parse_model_selectors(self, model_selectors: list) -> list:
         """Global list of model selectors. Each entry is a mapping with a
         ``name`` and the modifier flags (e.g. ``no_prefactors``). This is no
@@ -169,20 +79,20 @@ class ntkConfig(colibriConfig):
         :meth:`produce_init_grids_by_name`, and the presentation layer selects
         them by ``name``."""
         return list(model_selectors)
-    
+
     def produce_replica_paths(self, fit: FitSpec) -> NSList:
         """Returns the paths to the weight replicas for the specified fit."""
         path = fit.path / "nnfit"
-        sorted_replicas = _sort_replicas(path.glob("replica_*"))
+        sorted_replicas = sort_replicas(path.glob("replica_*"))
         return NSList(sorted_replicas, nskey="replica_path")
-    
+
     def produce_replicas(self, fit: FitSpec) -> NSList:
         """Returns the list of replica indices for the specified fit."""
         path = fit.path / "nnfit"
-        sorted_replicas = _sort_replicas(path.glob("replica_*"))
+        sorted_replicas = sort_replicas(path.glob("replica_*"))
         replica_indices = [int(r.stem.split("_")[-1]) for r in sorted_replicas]
         return NSList(replica_indices, nskey="replica")
-   
+
     def produce_nreplicas(
         self, fit: FitSpec, replica_ids: Sequence[int] | None = None, custom_nreplicas: int | None = None
     ) -> int:
@@ -198,16 +108,16 @@ class ntkConfig(colibriConfig):
                 raise ValueError(f"Number of specified replica_ids ({nreplicas}) exceeds the total number of replicas in the fit ({fit_nreplicas}).")
             return nreplicas
         return fit_nreplicas
-    
+
     def produce_fit_weights(
         self, fit: FitSpec, epoch: int | Iterable[int], replica_ids: Sequence[int] | None = None
     ) -> list[np.ndarray]:
-        """Load the fit weights for the given fit and epoch(s), in the format
-        expected by the n3fit model. ``epoch`` is either a single int (broadcast
-        to all replicas) or one int per replica."""
+        """Load the fit weights for the given fit and epoch(s), as flat parameter
+        vectors. ``epoch`` is either a single int (broadcast to all replicas) or one int
+        per replica."""
         path = fit.path / "fit_replicas"
         if replica_ids is None:
-            rf_paths = _sort_replicas(path.glob("replica_*"))
+            rf_paths = sort_replicas(path.glob("replica_*"))
         else:
             rf_paths = [path / f"replica_{rid}" for rid in replica_ids]
 
@@ -229,67 +139,11 @@ class ntkConfig(colibriConfig):
             for rf, e in zip(rf_paths, epoch_by_rep)
         ]
 
-    def produce_fit_preprocessing(self, fit: FitSpec, replica_ids: Sequence[int] | None = None) -> list[list[float]]:
-        parameters = []
+    def produce_stored_epochs(self, fit_kind) -> NSList:
+        """The epochs whose parameters the fit saved (for an n3fit fit, without the best
+        epoch)."""
+        return NSList(fit_kind.stored_epochs(), nskey="epoch")
 
-        # Get weight parameters
-        path = fit.path / "nnfit"
-        if replica_ids is None:
-            rf_paths = _sort_replicas(path.glob("replica_*"))
-        else:
-            rf_paths = [path / f"replica_{rid}" for rid in replica_ids]
-          
-        for rf in rf_paths:
-          with open(rf / f"{fit.name}.json", "r", encoding="utf-8") as f:
-              jf = json.load(f)
-              prep = jf['preprocessing']
-              prepr_weights = []
-              for fl in prep:
-                prepr_weights.append(fl["smallx"])
-                prepr_weights.append(fl["largex"])
-          parameters.append(prepr_weights)
-        return parameters
-
-    def produce_best_epochs(self, fit: FitSpec) -> BestEpochStat:
-        """Get the distribution of best epochs across replicas for a given fit"""
-        fitpath = fit.path
-        fit_replicas = fitpath / "nnfit"
-        best_epochs = []
-
-        replica_paths = list(_sort_replicas(fit_replicas.glob("replica_*")))
-        replica_paths.sort(key=lambda f: int(f.stem.split("_")[-1]))
-
-        for rep in replica_paths:
-            jsonfile = rep / f"{fit.name}.json"
-            with open(jsonfile, "r", encoding="utf-8") as f:
-                jf = json.load(f)
-                best_epoch = (jf['best_epoch'])
-                best_epochs.append(best_epoch)
-
-        stopping_points_stat = BestEpochStat(np.array(best_epochs).reshape(-1, 1))
-        return stopping_points_stat
-    
-    def produce_stored_epochs(self, fit: FitSpec, best_epochs: BestEpochStat) -> NSList:
-        """
-        Get the list of stored epochs for a given fit, excluding the best epoch.
-        """
-        fitpath = fit.path
-
-        # Assume all replicas have the same stored epochs
-        fit_replica = fitpath / "fit_replicas/replica_1/parameters"
-
-        # Get best epoch to exclude it from the list of (common stored epochs)
-        best_epoch = best_epochs.data[0]
-        epochs = []
-        for epoch_file in fit_replica.glob("params_*.npz"):
-            epoch = int(epoch_file.stem.split("_")[-1])
-            # Exclude the best epoch
-            if epoch != best_epoch:
-              epochs.append(epoch)
-
-        epochs_sorted = sorted(epochs)
-        return NSList(epochs_sorted, nskey="epoch")
-    
     def produce_epochs(self, stored_epochs: NSList, custom_epochs: Sequence[int] | None = None) -> NSList:
         """
         Get the list of epochs to evaluate, either from the stored epochs or from a custom list provided by the user.
@@ -297,208 +151,56 @@ class ntkConfig(colibriConfig):
         if custom_epochs is not None:
             return NSList(custom_epochs, nskey="epoch")
         return stored_epochs
-    
-    def produce_model_info(self, fit: FitSpec) -> dict:
-        fit_info = fit.as_input()
-        model_dict = {
-            "basis_info": fit_info["fitting"]["basis"],
-            "fitbasis": fit_info["fitting"]["fitbasis"],
-            "nodes": fit_info["parameters"]["nodes_per_layer"],
-            "activations": fit_info["parameters"]["activation_per_layer"],
-            "initializer": fit_info["parameters"]["initializer"],
-            "initializer_scale": fit_info["parameters"].get("initializer_scale", 1.0),
-            # Read back the init-width exponent the fit used (default 1.0 = standard
-            # glorot) so the rebuilt network-at-initialisation -- used as f0 -- matches
-            # the fit's actual initialisation, not a default one.
-            "initializer_gamma": fit_info["parameters"].get("initializer_gamma", 1.0),
-            "layer_type": fit_info["parameters"]["layer_type"],
-            "dropout": fit_info["parameters"]["dropout"],
-            "impose_sumrule": fit_info.get('sum_rules', "All"),
-            "optimizer": fit_info["parameters"]["optimizer"]["optimizer_name"],
-            "learning_rate": fit_info["parameters"]["optimizer"]["learning_rate"],
-            "clipnorm": fit_info["parameters"]["optimizer"]["clipnorm"],
-        }
-        return model_dict
-    
-    def produce_learning_rate(self, model_info: dict) -> float:
-        return model_info["learning_rate"]
-    
-    def produce_base_metamodels(self, model_info: dict, nreplicas: int) -> MetaModel:
-        """Build the raw PDF model, with random initialisation and the fit's
-        original (with-prefactor) preprocessing.
 
-        This is deliberately independent of ``model_selector``: the cheap,
-        per-selector difference (the preprocessing prefactor) is applied later in
-        :meth:`produce_metamodels`.
+    def produce_learning_rate(self, fit_kind) -> float:
+        return fit_kind.learning_rate()
+
+    def produce_pdf_ensemble(self, fit_kind, nreplicas: int, replica_ids: Sequence[int] | None = None):
+        """The fit's PDF model for ``nreplicas`` replicas, which evaluates the PDFs of
+        all replicas at once (see ``N3FitEnsemble``/``ColibriEnsemble``).
+
+        Built **once** per fit and replica count and shared by ``pdf_at_init``,
+        ``pdf_at_epoch``, ``init_grids_by_name`` and ``loss_function_grid``. This holds
+        only while ``fit`` is a direct input: a ``from_:`` would pin this production to
+        the deepest namespace and rebuild the model in every presentation loop (see
+        ``ntkanalysis.complete_mapping``).
         """
-        replica_settings_list = []
-        log.info(f"Building base PDF model for {nreplicas} replicas.")
-
-        # Build the model in double precision so its *weights* are float64 (not
-        # merely a float64-typed output of a float32 model). colibri's
-        # ``Environment`` has already enabled ``jax_enable_x64`` by the time this
-        # runs, so float64 here is genuine; this matches what
-        # ``ntkpdf.model.NTKPDFN3Fit`` forces on the NTK path, keeping the two
-        # model-build paths at the same precision. Done here (at build time)
-        # rather than at import to avoid toggling JAX state before it initialises.
-        import keras
-
-        keras.backend.set_floatx("float64")
-
-        for i in range(nreplicas):
-          # Initialize the replica setting for each replica
-          replica_settings = ReplicaSettings(
-              seed=i,
-              nodes=model_info["nodes"],
-              activations=model_info["activations"],
-              architecture=model_info["layer_type"],
-              initializer=model_info["initializer"],
-              initializer_scale=model_info["initializer_scale"],
-              initializer_gamma=model_info["initializer_gamma"],
-              dropout_rate=model_info["dropout"],
-              regularizer=None,
-              regularizer_args={})
-          replica_settings_list.append(replica_settings)
-
-        # Generate pdf model
-        pdf_model = generate_pdf_model(
-          replicas_settings=replica_settings_list,
-          flav_info=model_info["basis_info"],
-          fitbasis=model_info["fitbasis"],
-          out=14,
-          impose_sumrule=model_info["impose_sumrule"],
-          scaler=None
-        )
-
-        # Snapshot the as-built (with-prefactor) preprocessing weights so that
-        # produce_metamodels can deterministically restore them, regardless of
-        # the order in which selectors mutate this shared, memoised model.
-        pdf_model._ntk_base_preprocessing = [
-            pdf_model.get_replica_weights(i)["preprocessing_factor"]
-            for i in range(nreplicas)
-        ]
-        return pdf_model
-
-    def produce_metamodels(
-        self, base_metamodels: MetaModel, nreplicas: int, model_selector: Mapping | None = None
-    ) -> MetaModel:
-        """Return the raw PDF model with its preprocessing set according to
-        ``model_selector`` (see :func:`_apply_model_selector`). The expensive
-        replica networks come from :meth:`produce_base_metamodels`; only the
-        cheap prefactor weights are overwritten here.
-        """
-        return _apply_model_selector(base_metamodels, nreplicas, model_selector)
+        return fit_kind.ensemble(nreplicas, replica_ids)
 
     def produce_init_grids_by_name(
-        self, base_metamodels: MetaModel, nreplicas: int, model_selectors: Sequence[Mapping]
+        self, pdf_ensemble, model_selectors: Sequence[Mapping]
     ) -> dict[str, XPlottingGrid]:
-        """Build the PDF plotting grids at initialisation for every model
-        selector, once, and return a ``{selector_name: XPlottingGrid}`` mapping.
+        """The PDF plotting grids at initialisation for every model selector, as a
+        ``{selector_name: XPlottingGrid}`` mapping.
 
-        This is a config production that depends only on ``base_metamodels``
-        (i.e. on the fit and ``nreplicas``) and the global ``model_selectors``
-        list -- it does *not* depend on the ``Selectors``/``PDFscalespecs``
-        presentation namespaces. Reportengine therefore resolves it once per fit
-        and replica count and shares the result across those namespaces, instead
-        of rebuilding the (expensive) base model and re-predicting inside every
-        ``{@with ...@}`` loop. A reportengine ``collect`` cannot give this
-        sharing: a collect node is re-made at every request site, so collecting
-        the grids over ``model_selectors`` from inside the loops rebuilt
-        everything per loop iteration.
-
-        The selectors are applied in a plain loop (rather than via a collect)
-        precisely so this stays a single shared production. ``base_metamodels``
-        is mutated in place by :func:`_apply_model_selector`, which is safe
-        because each grid is materialised (predictions evaluated into a
-        NumPy-backed ``XPlottingGrid``) before the next selector is applied.
+        This production depends only on the fit, the replica count and the global
+        ``model_selectors`` list -- not on the ``Selectors``/``PDFscalespecs``
+        presentation namespaces, which pick their grids from it by name. A
+        reportengine ``collect`` over ``model_selectors`` would be re-made at every
+        request site, and so would the model.
         """
-        # Imported lazily: these pull in the keras/jax-backed stack, which must
-        # only happen after ``ntkpdf`` has set ``KERAS_BACKEND`` (see
-        # ``ntkpdf/__init__.py``).
-        from n3fit.vpinterface import EVOL_LIST, N3PDF
-        from validphys.pdfgrids import xplotting_grid
-        from ntkpdf.utils import XGRID
+        return {selector["name"]: _evolution_grid(pdf_ensemble.at_init(selector)) for selector in model_selectors}
 
-        grids = {}
-        for selector in model_selectors:
-            model = _apply_model_selector(base_metamodels, nreplicas, selector)
-            grids[selector["name"]] = xplotting_grid(
-                N3PDF(model.split_replicas()), 1.65, XGRID, "evolution", EVOL_LIST
-            )
-        return grids
-    
-    def produce_pdf_at_init(self, metamodels: MetaModel, input_grid: np.ndarray) -> NTKStats:
-        """Return the model at initialisation in the NTKStats format."""
-        return predict_pdf_grid(metamodels, input_grid)
-    
-    def produce_model_at_epoch(
-        self,
-        fit_weights: Sequence[np.ndarray],
-        fit_preprocessing: Sequence[Sequence[ArrayLike]],
-        metamodels: MetaModel,
-        nreplicas: int,
-        model_selector: Mapping | None = None,
-        vetoname: str | None = None,
-    ) -> tuple[MetaModel, np.ndarray]:
-        """Get the PDF model at the specified epoch, with the corresponding weights."""
-        pdf_models = set_epoch_weights(metamodels, fit_weights, fit_preprocessing, nreplicas, model_selector)
+    def produce_pdf_at_init(self, pdf_ensemble, model_selector: Mapping | None = None) -> NTKStats:
+        """The PDFs at initialisation, in the NTKStats format."""
+        return pdf_ensemble.at_init(model_selector)
 
-        vetoes = np.array([True] * nreplicas)
-        if vetoname:
-            raise NotImplementedError("Vetoes are not implemented yet. Please implement the veto logic in the produce_pdf_model_at_epochs method.")
-            # from ntk.veto import collect_vetoes
-            # vetoes = collect_vetoes(fitname, epochs, pdf_models, vetoname)["Total"]
+    def produce_pdf_at_epoch(
+        self, pdf_ensemble, fit_weights: Sequence[np.ndarray], model_selector: Mapping | None = None
+    ) -> NTKStats:
+        """The PDFs at the epoch of ``fit_weights``, in the NTKStats format."""
+        return pdf_ensemble.at(fit_weights, model_selector)
 
-        return pdf_models, vetoes
+    def produce_pdf_grid_at_epoch(self, pdf_at_epoch: NTKStats) -> XPlottingGrid:
+        """PDF plotting grid (``XPlottingGrid``) at a given epoch."""
+        return _evolution_grid(pdf_at_epoch)
 
-    def produce_pdf_at_epoch(self, model_at_epoch: tuple[MetaModel, np.ndarray], input_grid: np.ndarray) -> NTKStats:
-        pdf_models, vetoes = model_at_epoch
-        return predict_pdf_grid(pdf_models, input_grid, vetoes=vetoes)
+    def produce_fakepdf(self, fit_kind) -> PDF:
+        """The closure-test underlying-law PDF of the fit, parsed into a validphys PDF;
+        raises if the fit is not a closure test."""
+        return self.parse_pdf(fit_kind.fakepdf())
 
-    def produce_pdf_grid_at_epoch(self, model_at_epoch: tuple[MetaModel, np.ndarray]) -> XPlottingGrid:
-        """PDF plotting grid (``XPlottingGrid``) for the model at a given epoch.
-
-        This is a *production*, not a plain provider, and that is load-bearing.
-        ``produce_model_at_epoch`` loads each epoch's weights into the *shared*
-        base model **in place** and returns that same object, so the grid is
-        only valid while the model still holds this epoch's weights. As a
-        ``produce_`` method this runs eagerly at graph-build time, interleaved
-        with its own epoch's mutation -- ``model_at_epoch`` is resolved (the
-        model is set to this epoch) and the prediction is materialised into a
-        detached NumPy grid immediately after, before the next epoch's
-        production overwrites the model.
-
-        A deferred provider would instead run at *execution* time, after every
-        epoch's production has already mutated the shared model, so the model
-        would hold only the last epoch's weights and all collected grids (see
-        ``pdf_grid_all_epochs``) would be identical.
-        """
-        # Lazy imports: these pull in the keras/jax-backed stack, which must only
-        # happen after ``ntkpdf`` has set ``KERAS_BACKEND`` (see ``__init__.py``).
-        from n3fit.vpinterface import EVOL_LIST, N3PDF
-        from validphys.pdfgrids import xplotting_grid
-        from ntkpdf.utils import XGRID
-
-        pdf_models, _vetoes = model_at_epoch
-        return xplotting_grid(
-            N3PDF(pdf_models.split_replicas()), 1.65, XGRID, "evolution", EVOL_LIST
-        )
-
-    def produce_fakepdf(self, fit: FitSpec) -> PDF:
-        """The closure-test underlying-law PDF (``closuretest: fakepdf``) of the
-        fit, parsed into a validphys PDF. Mirrors the notebook's
-        ``fit.as_input()['closuretest']['fakepdf']``; raises if the fit is not a
-        closure test."""
-        try:
-            name = fit.as_input()["closuretest"]["fakepdf"]
-        except KeyError as e:
-            raise ConfigError(
-                f"fit {fit.name} has no 'closuretest: fakepdf' (not a closure test); "
-                "set show_fakepdf: False (the default) to skip the underlying-law overlay."
-            ) from e
-        return self.parse_pdf(name)
-
-    def produce_fakepdf_grid(self, fit: FitSpec, show_fakepdf: bool = False) -> XPlottingGrid | None:
+    def produce_fakepdf_grid(self, fit_kind, show_fakepdf: bool = False) -> XPlottingGrid | None:
         """Plotting grid for the closure-test underlying-law PDF, or ``None`` when
         the user did not opt in via ``show_fakepdf``.
 
@@ -510,73 +212,23 @@ class ntkConfig(colibriConfig):
         """
         if not show_fakepdf:
             return None
-        # Lazy import: keras/jax-backed stack, only after KERAS_BACKEND is set.
-        from validphys.pdfgrids import xplotting_grid
-        from n3fit.vpinterface import EVOL_LIST
-        from ntkpdf.utils import XGRID
-
-        fakepdf = self.produce_fakepdf(fit)
-        return xplotting_grid(fakepdf, 1.65, XGRID, "evolution", EVOL_LIST)
-
-    def produce_fitting_covmat_eigensystem(
-        self, fit: FitSpec, fitting_covmat_name: Path
-    ) -> tuple[np.ndarray, pd.DataFrame]:
-        """Eigendecomposition of the fitting covariance matrix, loaded **once**.
-
-        This is a *production* (not a plain provider) on purpose: the eigenvector
-        matrix is ``(Ndata, Ndata)`` -- hundreds of MB -- and a genuine per-fit
-        constant, but the consumers (`fk_diagonal_basis_train_val` etc.) are resolved
-        inside the report's nested ``{@with ...@}`` loops. As a provider it was
-        recomputed *and retained* once per presentation leaf (the from_: theory/dataset
-        taint, see CLAUDE.md), growing memory by ~0.6 GB/leaf -> OOM. As a production it
-        is evaluated once at graph-build and shared by every leaf.
-
-        The columns are deliberately left as read from disk: aligning them to the FK
-        index needs the ``ntk_fast_kernel_arrays`` provider (unavailable to a
-        production), so that cheap, idempotent relabelling is done by the single
-        consumer ``fk_diagonal_basis_train_val``.
-
-        Only valid for fits run with ``diagonal_basis=True``.
-        """
-        if not fit.as_input().get("diagonal_basis", True):
-            raise ConfigError(
-                f"Fit {fit.name} was not run with diagonal_basis=True; "
-                "fitting_covmat_eigensystem expects a diagonal-basis fit."
-            )
-        eigensystem = pd.read_csv(
-            fitting_covmat_name, index_col=[0], header=[0], sep="\t|,", engine="python",
-        )
-        eigvals = eigensystem.iloc[:, 0].values
-        eigvecs = eigensystem.iloc[:, 1:]
-        return eigvals, eigvecs
+        return xplotting_grid(self.produce_fakepdf(fit_kind), 1.65, XGRID, "evolution", EVOL_LIST)
 
     def produce_ntk_fast_kernel_arrays(
-        self, fit: FitSpec, padding: bool = True, flavour_basis: bool = False
-    ) -> pd.DataFrame:
-        """FK tables for the fit's data, built **once** as a production, anchored to ``fit``.
+        self, fit_kind, padding: bool = True, flavour_basis: bool = False
+    ):
+        """FK tables for the fit's data, built **once** per fit as a production.
 
-        A production (not a provider) for the same reason as
-        ``fitting_covmat_eigensystem``: the FK is a per-fit constant, and as a provider
-        it resolved to a separate node per presentation leaf (~200x) -> reloaded +
-        retained -> OOM.
-
-        The subtlety: it must depend on ``fit`` (a *direct value*, anchored to the few
-        fit-contexts where ``fit`` is defined), **not** on the global ``data``
-        (``produce_data``, a *production* that floats to every request site). Depending
-        on the floating ``data`` kept the downstream ``fk``/``m_matrix`` pinned per-leaf
-        even though this production has 0 exec nodes. So we build the fit's ``data``
-        here, inside the fit's own data context (``fitcontextwithcuts``), which keeps the
-        whole FK -> ``fk`` -> ``m_matrix`` chain anchored to ``fit`` and collapsed to a
-        handful of nodes. The FK build itself is unchanged
-        (``data_theory._build_ntk_fast_kernel_arrays``); verify node-count + bit-identical.
+        A production (not a provider) because the FK is a per-fit constant: as a
+        provider it resolved to a separate node per presentation leaf (~200x) ->
+        reloaded + retained -> OOM. The fit's reader builds its ``data`` with the fit's
+        own theory and cuts, outside this config's namespaces, so the FK depends on
+        ``fit`` alone and never on the global, floating ``data``.
         """
-        ctx = self.produce_fitcontextwithcuts(fit, self.produce_fitinputcontext(fit))
-        with self.set_context(ns=self._curr_ns.new_child(
-            {"theoryid": ctx["theoryid"], "use_cuts": ctx["use_cuts"]}
-        )):
-            data = self.produce_data(data_input=ctx["dataset_inputs"])
+        return _build_ntk_fast_kernel_arrays(fit_kind.data(), padding=padding, flavour_basis=flavour_basis)
 
-        # Lazy import: data_theory imports from this module (avoid a circular import).
-        from ntkpdf.data_theory import _build_ntk_fast_kernel_arrays
-
-        return _build_ntk_fast_kernel_arrays(data, padding=padding, flavour_basis=flavour_basis)
+    def produce_training_data(self, fit_kind, ntk_fast_kernel_arrays) -> TrainValData:
+        """The per-replica pseudodata, FK and inverse covmat of the training and
+        validation losses, built once per fit, each kind of fit as it was fitted (see
+        ``N3Fit``/``ColibriFit.training_data``)."""
+        return fit_kind.training_data(ntk_fast_kernel_arrays)

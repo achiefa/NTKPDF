@@ -9,6 +9,7 @@ from prompt_toolkit.completion import WordCompleter
 from reportengine.colors import t
 from ntkpdf import analysistemplate
 from ntkpdf.app import NTKApp as App
+from ntkpdf.fits import load_fit
 from validphys.loader import RemoteLoader
 from validphys.promptutils import KeywordsWithCache, confirm
 from validphys.utils import yaml_safe
@@ -167,36 +168,26 @@ class CompareFitApp(App):
             'keywords': args['keywords'],
         }
         currentmap = {'id': args['current_fit'], 'label': args['current_fit_label']}
-        autosettings['current'] = {
-            'fit': currentmap,
-            'pdf': currentmap,
-            'theory': {'from_': 'fit'},
-            'theoryid': {'from_': 'theory'},
-            'speclabel': args['current_fit_label'],
-        }
 
         # Singular `fit` injected directly (NOT via `from_: current`). Resolving a
         # `from_:` taints the config resolution (configparser.parse_from_ sets
-        # _tainted), which pins any dependent production -- e.g. base_metamodels --
+        # _tainted), which pins any dependent production -- e.g. pdf_ensemble --
         # to the deepest namespace, defeating reportengine's caching and rebuilding
         # the PDF model inside every Selectors/PDFscalespecs loop. A direct input
-        # lets base_metamodels/init_grids_by_name be cached once per (fit, nreplicas).
+        # lets pdf_ensemble/init_grids_by_name be cached once per (fit, nreplicas).
         autosettings['fit'] = currentmap
 
-        # Inject the data/theory context as DIRECT values too (not `from_: fit`),
-        # for the same anti-taint reason as `fit` above. The whole validphys data
-        # chain -- dataset_inputs_results, loaded commondata, ntk_fast_kernel_arrays,
-        # fitting_covmat_eigensystem -- hangs off these; with `from_:` the taint pins
-        # them to the deepest namespace, so they are reloaded *and retained* inside
-        # every nested `{@with ...@}` leaf (hundreds of full commondata/FK reloads ->
-        # millions of retained YAML-parser objects -> OOM). As direct inputs the data
-        # chain resolves once. Values are exactly what `from_: fit` would yield.
+        # What depends on the kind of fit (ntkpdf.fits): the `current` namespace (an
+        # n3fit fit also has an LHAPDF set and a theory), the data/theory context, and
+        # the n3fit-only settings of analysis.yaml that a colibri fit overrides. The
+        # data/theory context is injected as DIRECT values (not `from_: fit`), for the
+        # same anti-taint reason as `fit` above: the validphys data chain hangs off
+        # it, and with `from_:` it would be reloaded *and retained* inside every
+        # nested `{@with ...@}` leaf (hundreds of commondata reloads -> OOM).
         from validphys.loader import FallbackLoader
 
-        _fit_input = FallbackLoader().check_fit(args['current_fit']).as_input()
-        autosettings['dataset_inputs'] = _fit_input['dataset_inputs']
-        autosettings['theory'] = _fit_input['theory']
-        autosettings['theoryid'] = _fit_input['theory']['theoryid']
+        fit_kind = load_fit(FallbackLoader().check_fit(args['current_fit']))
+        autosettings.update(fit_kind.report_settings(currentmap))
 
         # One namespace entry per user-selected epoch; the PDF-at-epochs report
         # page iterates over these. Empty (default) -> that page renders nothing.

@@ -295,8 +295,8 @@ def compute_ntk_decomposition_by_replica_at_epoch(
 def compute_ntk_decomposition_ensemble(
     eigenvalues_at_epoch: NTKStats,
     eigenvectors_at_epoch: NTKStats,
-    fk_diagonal_basis_train_val, 
-    cinv_diagonal_basis_train_val,
+    fk_train_val,
+    cinv_train_val,
     m_matrix_train_val,
     tol: float = 1e-12,
     training: bool = True,
@@ -329,8 +329,8 @@ def compute_ntk_decomposition_ensemble(
     """
     idx_tr_val = 0 if training else 1
     M = m_matrix_train_val[idx_tr_val]
-    Cinv = cinv_diagonal_basis_train_val[idx_tr_val]
-    FK = fk_diagonal_basis_train_val[idx_tr_val]
+    Cinv = cinv_train_val[idx_tr_val]
+    FK = fk_train_val[idx_tr_val]
 
     per_replica = _per_replica(
         compute_ntk_decomposition_by_replica_at_epoch,

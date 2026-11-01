@@ -18,13 +18,6 @@ from reportengine import collect
 
 collected_init_grids = collect("init_grids_by_name", ("fits",))
 
-# ``pdf_grid_at_epoch`` is built as a config production
-# (``ntkConfig.produce_pdf_grid_at_epoch``) rather than a plain provider: the
-# grid must be materialised at graph-build time, interleaved with the in-place
-# mutation of the shared model in ``produce_model_at_epoch``, before the next
-# epoch overwrites it. A deferred provider would run after every epoch's
-# production, so all collected grids would show the last epoch.
-#
 # The "all epochs compared" page follows the user's ``--epochs`` (the ``Epochspecs``
 # namespace), matching the per-epoch snapshot page -- NOT ``produce_epochs`` /
 # ``custom_epochs``, which is a testing knob limiting the *trajectory* grids
