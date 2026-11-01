@@ -34,7 +34,7 @@ test = [
 
 [tool.poetry.scripts]
 ntkpdf = "ntkpdf.app:main"
-ntkanalysis = "ntkpdf.scripts:ntkanalysis"
+ntkanalysis = "ntkpdf.scripts.ntkanalysis:main"
 
 [tool.pytest.ini_options]
 testpaths = ["ntkpdf/tests"]

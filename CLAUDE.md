@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`ntkpdf` is a small analysis app for studying **already-trained** NNPDF/n3fit PDF fits
-through the lens of the **Neural Tangent Kernel (NTK)**. It does not run fits; it loads
-the weights a fit saved to disk (at multiple training epochs), rebuilds the n3fit PDF
-model in memory, and produces eigenvalue spectra, PDF grids, and comparison reports.
+`ntkpdf` is a small analysis app for studying **already-trained** PDF fits through the lens
+of the **Neural Tangent Kernel (NTK)**: n3fit neural networks, and colibri Monte Carlo fits
+of any colibri model (e.g. colibri_msht's FPPDF parametrisation). It does not run fits; it
+loads the parameters a fit saved to disk (at multiple training epochs), rebuilds the model in
+memory, and produces eigenvalue spectra, PDF grids, and comparison reports.
 
 It is a thin **reportengine** layer stacked on top of two upstream packages:
 
@@ -36,6 +37,20 @@ python -c "import validphys, os; print(os.path.dirname(os.path.dirname(os.path.d
 Run these with the project's environment Python. grep those checkouts directly when a
 provider name or symbol isn't defined in this repo. If a package isn't importable, ask the
 user to pin down its location.
+
+## Running it: setup, fits, reports
+
+`README.md` is the recipe for a new machine, in order: the conda env (`environment.yml`),
+colibri_msht added with `pip install --no-deps -e` (without `--no-deps` its requirements
+replace colibri's `ntk` branch), producing a fit (colibri_msht or n3fit, with the runcard
+keys that save `params_<e>.npz`), moving it into the NNPDF results folder, and running
+`ntkanalysis`. Follow it rather than improvising, and update it when one of these steps
+changes. colibri_msht's own README describes its runcards and tests.
+
+Before trusting a run, check which code the environment imports:
+`python -c "import ntkpdf, colibri; print(ntkpdf.__file__, colibri.__file__)"`. Editable
+installs may point at another checkout (e.g. the main checkout while you work in a
+worktree); put this checkout first on `PYTHONPATH` to run it.
 
 ## Reportengine: the one thing you must internalise
 
@@ -129,30 +144,34 @@ relabel — which needs a provider — moved to its one consumer `fk_diagonal_ba
 ## Commands
 
 ```bash
-# Install (Poetry; nnpdf + colibri must already be importable in the env)
-poetry install
+# Install: see README.md (conda env from environment.yml, then colibri_msht with --no-deps)
 
 # Run a report from a runcard (output dir defaults to the runcard's stem)
 ntkpdf path/to/runcard.yaml
 ntkpdf path/to/runcard.yaml -o output_dir
 
-# Generate a full NTK comparison report for one fit via the bundled template.
+# Generate a full NTK report for one fit via the bundled template.
 # Fills ntkpdf/analysistemplate/analysis.yaml with the chosen fit, then runs it.
-ntkanalysis <fit_id> --title "..." --author "..." --keywords k1 k2
-ntkanalysis -i        # interactive: prompts for fit/title/author/keywords
+ntkanalysis <fit_id> --title "..." --author "..." --keywords k1 k2 -o output_dir
+# `python -m ntkpdf.scripts.ntkanalysis ...` is the same, and works without the executable
+# (`pip install -e .` creates it). With -i (interactive) still pass --title: the title
+# prompt's default refers to an undefined `reference_fit`.
 
 # Useful ntkanalysis flags:
 #   --epochs 100 500 1000   PDF-at-epoch snapshot pages (-> Epochspecs namespace)
+#   --replicas 1 2          single-replica eigenvalue/feature pages (-> Replicaspecs)
 #   --show-fakepdf          overlay the closure-test underlying law on those plots
 #   --thcovmat_if_present   use the theory covmat for the statistical estimators
 #   --formats pdf           figure formats (default png+pdf; this avoids the PNGs)
 ```
 
 Tests live in `ntkpdf/tests/`. `pytest -m "not fit"` runs the fast ones; plain `pytest` also runs
-the `fit`-marked end-to-end tests, which download the test fit (`conftest.FIT`) on demand.
+the `fit`-marked end-to-end tests, which download the n3fit test fit (`conftest.FIT`) and build a
+small colibri_msht fit (`conftest.COLIBRI_FIT`, so colibri_msht must be installed) on demand, both
+into the NNPDF results folder.
 
-`ntkpdf/scripts/260526-ac-02-ntk-sgd/` is a captured example run (input runcard, figures,
-tables, `meta.yaml`) — a good reference for what a completed report looks like.
+To see what a completed report looks like, run `ntkanalysis` on the small colibri test fit
+(`ntkpdf_test_colibri_msht`, built by the fit tests).
 
 `ntkpdf/examples/*.ipynb` are the best **API usage** references (they call providers directly,
 the fastest way to prototype/debug a new one): `h_val_grid.ipynb` (build + plot an `hValGrid`)
@@ -182,7 +201,7 @@ behaviour as a member of both readers.
 | | n3fit (`N3Fit`) | colibri (`ColibriFit`) |
 |---|---|---|
 | Model | rebuilt from `filter.yml` (`_model_init_args`) + `nnfit/replica_<r>/<fit>.json` preprocessing | `pdf_model.pkl` (dill; its class must be importable) |
-| `params_<e>.npz` | weights after e steps (`params_0` = init); the best epoch is saved too and left out of `stored_epochs` | parameters after e epochs (`params_0` = init), as colibri saves them since 9b8aa8ea |
+| `params_<e>.npz` | weights after e steps (`params_0` = init, since nnpdf 8e0b89e3b); the best epoch is saved too and left out of `stored_epochs` | parameters after e epochs (`params_0` = init), as colibri saves them since 9b8aa8ea |
 | Training data | saved pseudodata + covmat eigensystem (`tables/`) | regenerated with colibri's `central_covmat_index` + `mc_pseudodata` |
 | Selectors | `model`, `no_prefactors`, `nn`, `no_smr` | `model` |
 | Report | validphys fit tables | `report_settings()`: no validphys tables, model-only selectors |

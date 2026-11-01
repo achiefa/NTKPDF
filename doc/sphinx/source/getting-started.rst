@@ -4,12 +4,18 @@ Getting started
 Installation
 ------------
 
-Use an environment in which NNPDF's ``n3fit`` and ``validphys``, and colibri,
-are already importable. From the ntkpdf checkout, install with Poetry:
+The repository's ``README.md`` takes a new machine through the whole setup:
+the environment, colibri_msht, data downloads, producing fits and running a
+report. In short, from the ntkpdf checkout:
 
 .. code-block:: console
 
-   poetry install
+   conda env create -f environment.yml          # environment "ntkpdf-dev"
+   conda activate ntkpdf-dev
+   pip install --no-deps -e /path/to/colibri_msht   # branch msht, for MSHT fits
+
+``--no-deps`` keeps colibri's ``ntk`` branch, which colibri_msht's own
+requirements would replace with colibri's default branch.
 
 ``pyproject.toml`` pins colibri's ``ntk`` branch. NNPDF is supplied through
 colibri rather than a second ntkpdf pin. Use compatible development checkouts;
@@ -21,6 +27,32 @@ Import ntkpdf before using its model stack. ``ntkpdf.__init__`` defaults
 ``KERAS_BACKEND`` to ``jax`` before the Keras-backed modules are loaded. It also
 applies the plotting style. That style enables LaTeX text rendering; rendering
 figures therefore needs a working LaTeX installation unless you override it.
+
+Fits ntkpdf can read
+--------------------
+
+A fit must save each replica's parameters at several epochs
+(``fit_replicas/replica_<r>/parameters/params_<e>.npz``, see
+:doc:`design/fits-models`) and sit in the NNPDF results folder
+(``validphys.loader.Loader().resultspath``). The runcard keys that save them:
+
+.. code-block:: yaml
+
+   # colibri (e.g. colibri_msht): its runcards already set these
+   record_parameters: true
+   record_every: 50
+
+   # n3fit, nnpdf branch ntk_colibri
+   diagonal_basis: true
+   fitting:
+     savepseudodata: true
+   save_checkpoints: true
+   checkpoint_freq: 50
+
+A colibri_msht fit is one run per Monte Carlo replica,
+``colibri_msht runcard.yaml -rep N``, writing into the folder named after the
+runcard; move that folder into the results folder. The README gives the
+commands for both kinds of fit.
 
 Run a report
 ------------
@@ -39,13 +71,14 @@ To fill the bundled analysis template for one fit:
 
 .. code-block:: console
 
-   python -m ntkpdf.scripts.ntkanalysis FIT_ID \
+   ntkanalysis FIT_ID \
        --title "NTK analysis" --author "Your name" --keywords ntk pdf \
        --epochs 500 1000 --replicas 1 --formats pdf -o report-output
 
 Replace ``FIT_ID`` with a fit known to validphys's loader. Requested epochs
-must have saved parameter files. The module entry point above calls
-``CompareFitApp.main`` through the script's ``main`` function.
+must have saved parameter files. ``ntkanalysis`` is the console script that
+``pip install`` creates; ``python -m ntkpdf.scripts.ntkanalysis`` runs the same
+``main``, which calls ``CompareFitApp.main``.
 
 The following arguments are defined in
 ``ntkpdf.scripts.ntkanalysis.CompareFitApp.add_positional_arguments``:
