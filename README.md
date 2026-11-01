@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo/ntkpdf-banner-dark.svg">
+    <img alt="ntkpdf: the proton structure, one mode at a time" src="docs/logo/ntkpdf-banner.svg" width="560">
+  </picture>
+</p>
+
 [![DOI](https://zenodo.org/badge/1260769576.svg)](https://doi.org/10.5281/zenodo.23495650)
 
 # ntkpdf
